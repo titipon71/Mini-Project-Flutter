@@ -1,0 +1,83 @@
+{
+  "project_info": {
+    "project_number": "843254746575",
+    "firebase_url": "https://flutterapp-3d291-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "flutterapp-3d291",
+    "storage_bucket": "flutterapp-3d291.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:843254746575:android:3b2559f1138f43579396ba",
+        "android_client_info": {
+          "package_name": "com.example.miniflutterproject"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "843254746575-6rrphigfqjote8lem5v7p5fii6mgsh3h.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEtZtJh6avLPntuk0wZKpeZcPfBDIhyj4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "843254746575-6rrphigfqjote8lem5v7p5fii6mgsh3h.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "843254746575-b7oa918u0m7s12v03u63vngfsj7lnc8a.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.miniflutterproject"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:843254746575:android:5bcd3c5acd34ba7c9396ba",
+        "android_client_info": {
+          "package_name": "com.example.my_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "843254746575-6rrphigfqjote8lem5v7p5fii6mgsh3h.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEtZtJh6avLPntuk0wZKpeZcPfBDIhyj4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "843254746575-6rrphigfqjote8lem5v7p5fii6mgsh3h.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "843254746575-b7oa918u0m7s12v03u63vngfsj7lnc8a.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.miniflutterproject"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

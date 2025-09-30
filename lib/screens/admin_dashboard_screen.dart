@@ -1,0 +1,304 @@
+// admin_dashboard_screen.dart
+import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:my_app/screens/add_chapter_screen.dart';
+import 'package:my_app/screens/add_manga_screen.dart';
+import 'package:my_app/screens/edit_chapter_screen.dart';
+
+class AdminDashboard extends StatefulWidget {
+  const AdminDashboard({super.key});
+
+  @override
+  State<AdminDashboard> createState() => _AdminDashboardState();
+}
+
+class _AdminDashboardState extends State<AdminDashboard> {
+  List mangas = [];
+  bool isLoading = true;
+
+  /// จำค่าว่าการ์ด manga แต่ละอัน (index) เลือก chapter index ไหนใน Dropdown
+  /// key = mangaIndex ใน ListView, value = chapterIndex จริงใน Firebase (เริ่มที่ 1)
+  final Map<int, int?> selectedChapterByManga = {};
+
+  DatabaseReference get _rootRef => FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL:
+            'https://flutterapp-3d291-default-rtdb.asia-southeast1.firebasedatabase.app/',
+      ).ref();
+
+  @override
+  void initState() {
+    super.initState();
+    fetchMangas();
+  }
+
+  Future<void> fetchMangas() async {
+    final snapshot = await _rootRef.child('mangas').get();
+    if (snapshot.exists) {
+      final value = snapshot.value;
+      List<Map<String, dynamic>> mangaList = [];
+
+      if (value is List) {
+        mangaList = value
+            .where((e) => e != null)
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+
+      setState(() {
+        mangas = mangaList;
+        isLoading = false;
+
+        // รีเซ็ตตัวเลือกตอนต่อการ์ด ถ้ายังไม่เคยตั้งค่า ให้เลือกตอนแรกที่มีได้
+        for (var i = 0; i < mangas.length; i++) {
+          final chapters = _extractChapters(mangas[i]);
+          if (chapters.isNotEmpty && selectedChapterByManga[i] == null) {
+            // บันทึก chapterIndex จริง (ใน Firebase) ของตอนแรก
+            selectedChapterByManga[i] = chapters.first['chapterIndex'] as int;
+          }
+        }
+      });
+    } else {
+      setState(() {
+        mangas = [];
+        isLoading = false;
+      });
+    }
+  }
+
+  /// แปลง chapters ที่เป็น List (มี null ตัวแรก) -> List<Map> ที่สะอาด
+  /// และพ่วงค่า chapterIndex (index จริงใน Firebase)
+  List<Map<String, dynamic>> _extractChapters(Map<String, dynamic> manga) {
+    final raw = manga['chapters'];
+    if (raw is! List) return [];
+    final List<Map<String, dynamic>> result = [];
+    for (int i = 0; i < raw.length; i++) {
+      final item = raw[i];
+      if (item == null) continue;
+      final map = Map<String, dynamic>.from(item);
+      map['chapterIndex'] = i; // สำคัญ: index จริงใน Firebase
+      result.add(map);
+    }
+    // ตัด null แรกออกแล้วจะเหลือ index เริ่มตั้งแต่ 1 ขึ้นไป
+    // จัดเรียงตาม number (ถ้าต้องการ)
+    result.sort((a, b) {
+      final an = (a['number'] ?? 0) as int;
+      final bn = (b['number'] ?? 0) as int;
+      return an.compareTo(bn);
+    });
+    return result;
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Admin Dashboard'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+      ),
+      backgroundColor: Colors.grey[900],
+      body: Column(
+        children: [
+          // ปุ่มเพิ่มเรื่องใหม่
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const AddMangaScreen(),
+                  ),
+                ).then((_) => fetchMangas()); // refresh หลังเพิ่มเรื่องใหม่
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('เพิ่มเรื่องใหม่'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ),
+
+          // รายการเรื่องทั้งหมด
+          Expanded(
+            child: isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    itemCount: mangas.length,
+                    itemBuilder: (context, index) {
+                      final manga = mangas[index];
+
+                      // ดึง chapters ที่สะอาด + มี chapterIndex แนบมา
+                      final chapters = _extractChapters(manga);
+
+                      return Card(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        color: Colors.grey[800],
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: manga['cover'] != null
+                                    ? Image.network(
+                                        manga['cover'],
+                                        width: 50,
+                                        height: 70,
+                                        fit: BoxFit.cover,
+                                      )
+                                    : const Icon(Icons.image,
+                                        color: Colors.white),
+                                title: Text(
+                                  manga['name'] ?? 'ไม่มีชื่อ',
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                                subtitle: Text(
+                                  'จำนวนตอน: ${chapters.length}',
+                                  style: TextStyle(color: Colors.grey[400]),
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                AddChapterScreen(
+                                              mangaIndex: index +
+                                                  1, // +1 เพราะ Firebase index เริ่มจาก 1
+                                              mangaName: manga['name'],
+                                            ),
+                                          ),
+                                        ).then((_) => fetchMangas());
+                                      },
+                                      icon: const Icon(Icons.add_circle),
+                                      tooltip: 'เพิ่มตอน',
+                                      color: Colors.blue,
+                                    ),
+                                    IconButton(
+                                      onPressed: () {
+                                        // TODO: แก้ไขเรื่อง (metadata ของเรื่อง)
+                                      },
+                                      icon: const Icon(Icons.edit),
+                                      tooltip: 'แก้ไขเรื่อง',
+                                      color: Colors.orange,
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // ===== Dropdown รายชื่อตอน + ปุ่มแก้ไขตอน =====
+                              if (chapters.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey[700],
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: DropdownButton<int>(
+                                          value: selectedChapterByManga[index] ??
+                                              chapters.first['chapterIndex']
+                                                  as int,
+                                          isExpanded: true,
+                                          underline: const SizedBox.shrink(),
+                                          dropdownColor: Colors.grey[800],
+                                          iconEnabledColor: Colors.white,
+                                          style: const TextStyle(
+                                              color: Colors.white),
+                                          items: chapters.map((c) {
+                                            final ci =
+                                                c['chapterIndex'] as int; // db
+                                            final num =
+                                                (c['number'] ?? '').toString();
+                                            final title =
+                                                (c['title'] ?? '').toString();
+                                            return DropdownMenuItem<int>(
+                                              value: ci,
+                                              child: Text(
+                                                  'ตอนที่ $num - $title'),
+                                            );
+                                          }).toList(),
+                                          onChanged: (val) {
+                                            setState(() {
+                                              selectedChapterByManga[index] =
+                                                  val;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton.filled(
+  onPressed: () async {
+    final chapters = _extractChapters(manga);
+    final selectedIdx = selectedChapterByManga[index] ??
+        chapters.first['chapterIndex'] as int;
+
+    final chapter = chapters.firstWhere(
+      (c) => (c['chapterIndex'] as int) == selectedIdx,
+    );
+
+    final updated = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditChapterScreen(
+          mangaIndexForDb: index + 1,        // index จริงของ manga ใน DB (เริ่ม 1)
+          chapterIndexForDb: selectedIdx,    // index จริงของ chapter ใน DB (เริ่ม 1)
+          initialChapter: chapter,           // ส่งข้อมูลตอนปัจจุบันไปแก้
+          mangaName: manga['name'] ?? 'ไม่มีชื่อ',
+        ),
+      ),
+    );
+
+    // ถ้าหน้าแก้ไขกดบันทึกแล้ว pop(true) กลับมา ให้รีเฟรชรายการ
+    if (updated == true) {
+      await fetchMangas();
+      selectedChapterByManga[index] = selectedIdx; // คงค่าตอนที่เลือกไว้
+      setState(() {}); // เผื่ออัปเดต UI
+    }
+  },
+  icon: const Icon(Icons.edit),
+  tooltip: 'แก้ไขตอนที่เลือก',
+  style: const ButtonStyle(
+    backgroundColor: WidgetStatePropertyAll(Colors.orange),
+    foregroundColor: WidgetStatePropertyAll(Colors.white),
+  ),
+),
+                                  ],
+                                ),
+                              ] else ...[
+                                Text(
+                                  'ยังไม่มีตอน',
+                                  style: TextStyle(color: Colors.grey[400]),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
