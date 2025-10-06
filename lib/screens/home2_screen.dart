@@ -1,4 +1,3 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:my_app/assets/widgets/example_sidebarx.dart';
@@ -10,17 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'dart:convert'; // เพิ่ม import นี้
 
-final List<String> imgInformationList = [
-  'lib/assets/images/welcome.png',
-  'lib/assets/images/99b.png',
-  'lib/assets/images/popular/I-made-a-Deal_1_1757569497.jpg',
-  'lib/assets/images/popular/madam_1-(2)_1757569729.jpg',
-  'lib/assets/images/popular/madam_1-(3)_1757569781.jpg',
-  'lib/assets/images/popular/Untitled-1_1757570500.jpg',
-  'lib/assets/images/popular/1.png',
-];
-
-
+// imgInformationList จะถูกโหลดจาก Firebase แทน
 
 final MyColor = Color(0xFFF6B606);
 
@@ -40,6 +29,7 @@ class _Home2ScreenState extends State<Home2Screen>
   // เพิ่มตัวแปรที่หายไป
   List mangas = [];
   List latestUpdatedMangas = []; // เพิ่มตัวแปรสำหรับมังงะที่อัปเดตล่าสุด
+  List<String> imgInformationList = []; // รายการรูปภาพสำหรับ carousel
   bool isLoading = true;
 
   late final AnimationController _AnimationController;
@@ -64,69 +54,130 @@ class _Home2ScreenState extends State<Home2Screen>
 
     // เรียกใช้ function เมื่อเริ่มต้น
     fetchMangaDB();
+    fetchCarouselImages();
+  }
+
+  // โหลดรูปภาพสำหรับ carousel จาก Firebase
+  Future<void> fetchCarouselImages() async {
+    try {
+      final ref = FirebaseDatabase.instance.ref('website_info/carousel_images');
+
+      final snapshot = await ref.get();
+      List<String> imagesList = [];
+
+      if (snapshot.exists) {
+        final value = snapshot.value;
+
+        if (value is List) {
+          imagesList = value
+              .where((item) => item is String && item.isNotEmpty)
+              .cast<String>()
+              .toList();
+        } else if (value is Map) {
+          imagesList = value.values
+              .where((item) => item is String && item.isNotEmpty)
+              .cast<String>()
+              .toList();
+        }
+      }
+
+      setState(() {
+        imgInformationList = imagesList;
+        _current = 0; // กัน out-of-range เสมอ
+      });
+    } catch (_) {
+      setState(() {
+        imgInformationList = [];
+        _current = 0;
+      });
+    }
   }
 
   // ย้าย function fetchMangaDB เข้ามาใน class
   Future<void> fetchMangaDB() async {
-    final databaseRef = FirebaseDatabase.instanceFor(
-      app: Firebase.app(),
-      databaseURL:
-          'https://flutterapp-3d291-default-rtdb.asia-southeast1.firebasedatabase.app/',
-    ).ref('mangas');
+    final databaseRef = FirebaseDatabase.instance.ref('mangas');
+    try {
+      final snapshot = await databaseRef.get();
 
-    final snapshot = await databaseRef.get();
-
-    if (snapshot.exists) {
-      final value = snapshot.value;
-      List<Map<String, dynamic>> mangaList = [];
-
-      if (value is Map) {
-        // กรณี database เก็บเป็น object { "1": {...}, "2": {...} }
-        value.forEach((key, data) {
-          if (data != null) {
-            // เช็ค null ก่อน
-            mangaList.add(Map<String, dynamic>.from(data));
-          }
+      if (!snapshot.exists) {
+        setState(() {
+          mangas = [];
+          latestUpdatedMangas = [];
+          isLoading = false;
         });
-      } else if (value is List) {
-        // กรณี database เก็บเป็น array [null, {...}, {...}]
-        mangaList = value
-            .where((e) => e != null) // กรอง null ออก
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        return;
       }
 
-      // เรียงลำดับตาม updatedAt ของ chapter ล่าสุด
-      List<Map<String, dynamic>> sortedMangaList = mangaList.map((manga) {
-        // หา updatedAt ล่าสุดของ manga นี้
+      final raw = snapshot.value;
+      final List<Map<String, dynamic>> mangaList = [];
+
+      if (raw is Map) {
+        // ถ้าเป็น Map: พยายาม parse key เป็นเลข index จริง
+        raw.forEach((key, data) {
+          if (data is Map) {
+            final m = Map<String, dynamic>.from(data);
+            final idx = int.tryParse(key.toString());
+            if (idx != null && idx > 0) {
+              m['__dbIndex'] = idx; // <---- เก็บ index 1-based
+            }
+            mangaList.add(m);
+          }
+        });
+      } else if (raw is List) {
+        // ถ้าเป็น List: ข้าม index 0 (ที่เป็น null) แล้วเก็บ index จริงไว้
+        for (var i = 1; i < raw.length; i++) {
+          final e = raw[i];
+          if (e is Map) {
+            final m = Map<String, dynamic>.from(e);
+            m['__dbIndex'] = i; // <---- เก็บ index 1-based
+            mangaList.add(m);
+          }
+        }
+      }
+
+      // คำนวณเวลาอัปเดตล่าสุดต่อเรื่อง (รองรับ chapters เป็น List/Map)
+      List<Map<String, dynamic>> withLatest = mangaList.map((manga) {
         int latestUpdateTime = 0;
-        if (manga['chapters'] is List) {
-          List chapters = manga['chapters'];
-          for (var chapter in chapters) {
-            if (chapter != null && chapter['updatedAt'] != null) {
-              int updateTime = chapter['updatedAt'];
-              if (updateTime > latestUpdateTime) {
-                latestUpdateTime = updateTime;
-              }
+
+        final chapters = manga['chapters'];
+        Iterable chapterValues;
+        if (chapters is List) {
+          chapterValues = chapters.where((c) => c != null);
+        } else if (chapters is Map) {
+          chapterValues = chapters.values.where((c) => c != null);
+        } else {
+          chapterValues = const [];
+        }
+
+        for (final ch in chapterValues) {
+          if (ch is Map && ch['updatedAt'] != null) {
+            final rawTime = ch['updatedAt'];
+            int? ms;
+            if (rawTime is int) {
+              ms = rawTime;
+            } else if (rawTime is String) {
+              ms = int.tryParse(rawTime);
+            }
+            if (ms != null && ms > latestUpdateTime) {
+              latestUpdateTime = ms;
             }
           }
         }
-        // เพิ่ม latestUpdateTime เข้าไปใน manga object
-        manga['latestUpdateTime'] = latestUpdateTime;
-        return manga;
+
+        return {...manga, 'latestUpdateTime': latestUpdateTime};
       }).toList();
 
-      // เรียงจากล่าสุดไปเก่าสุด
-      sortedMangaList.sort((a, b) => 
-        (b['latestUpdateTime'] ?? 0).compareTo(a['latestUpdateTime'] ?? 0)
+      withLatest.sort(
+        (a, b) =>
+            (b['latestUpdateTime'] ?? 0).compareTo(a['latestUpdateTime'] ?? 0),
       );
 
       setState(() {
-        mangas = mangaList; // รายการทั้งหมด
-        latestUpdatedMangas = sortedMangaList; // รายการเรียงตามอัปเดต
+        mangas = mangaList; // <-- มี __dbIndex อยู่แล้ว
+        latestUpdatedMangas = withLatest; // <-- ยังพก __dbIndex มาด้วย
         isLoading = false;
       });
-    } else {
+    } catch (e) {
       setState(() {
         mangas = [];
         latestUpdatedMangas = [];
@@ -170,13 +221,7 @@ class _Home2ScreenState extends State<Home2Screen>
                         items: imgInformationList.map((p) {
                           return ClipRRect(
                             borderRadius: BorderRadius.circular(30),
-                            child: Image.asset(
-                              p,
-                              fit: BoxFit
-                                  .cover, // เปลี่ยนเป็น contain ได้หากไม่อยากให้ครอป
-                              width: 584,
-                              height: 219,
-                            ),
+                            child: _buildCarouselImage(p, 584, 219),
                           );
                         }).toList(),
                         options: CarouselOptions(
@@ -201,12 +246,7 @@ class _Home2ScreenState extends State<Home2Screen>
                       child: Container(
                         color: Colors.black,
                         alignment: Alignment.center,
-                        child: Image.asset(
-                          p,
-                          fit: BoxFit
-                              .cover, // หรือ BoxFit.contain ถ้าไม่อยากครอป
-                          width: double.infinity,
-                        ),
+                        child: _buildCarouselImage(p, null, 200),
                       ),
                     );
                   }).toList(),
@@ -222,126 +262,20 @@ class _Home2ScreenState extends State<Home2Screen>
                 );
               },
             ),
-
-            const SizedBox(height: 8),
-            AnimatedSmoothIndicator(
-              activeIndex: _current,
-              count: imgInformationList.length,
-              effect: const WormEffect(
-                dotWidth: 8,
-                dotHeight: 8,
-                activeDotColor: Color(0xFFF6B606),
+            if (imgInformationList.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              AnimatedSmoothIndicator(
+                activeIndex: _current,
+                count: imgInformationList.length,
+                effect: const WormEffect(
+                  dotWidth: 8,
+                  dotHeight: 8,
+                  activeDotColor: Color(0xFFF6B606),
+                ),
+                onDotClicked: (i) => _carouselCtrl.animateToPage(i),
               ),
-              onDotClicked: (i) => _carouselCtrl.animateToPage(i),
-            ),
-
+            ],
             const SizedBox(height: 16),
-
-            // ---------- ปุ่มหมวด ----------
-            // Center(
-            //   child: Container(
-            //     constraints: const BoxConstraints(maxWidth: 800),
-            //     width: double.infinity,
-            //     height: 50,
-            //     margin: const EdgeInsets.symmetric(horizontal: 20),
-            //     padding: const EdgeInsets.all(8),
-            //     decoration: BoxDecoration(
-            //       color: Color(0xFFF6B606),
-            //       borderRadius: BorderRadius.circular(37),
-            //     ),
-            //     child: Wrap(
-            //       spacing: 20,
-            //       runAlignment: WrapAlignment.center,
-            //       crossAxisAlignment: WrapCrossAlignment.center,
-            //       alignment: WrapAlignment.center,
-            //       children: [
-            //         _chipButton("โรแมนซ์"),
-            //         const SizedBox(width: 1),
-            //         _chipButton("แอ็กชัน"),
-            //         const SizedBox(width: 10),
-            //         _chipButton("วาย"),
-            //       ],
-            //     ),
-            //   ),
-            // ),
-            // ---------- Carousel #2 (imgInformationListmangapop) ----------
-            // LayoutBuilder(
-            //   builder: (context, constraints) {
-            //     final w = constraints.maxWidth;
-            //     final bool isDesktop = w >= 600;
-
-            //     if (isDesktop) {
-            //       return Center(
-            //         child: SizedBox(
-            //           width: 584,
-            //           height: 219,
-            //           child: CarouselSlider(
-            //             carouselController: _carouselCtrlmangapop,
-            //             items: imgInformationListmangapop.map((p) {
-            //               return ClipRRect(
-            //                 borderRadius: BorderRadius.circular(20),
-            //                 child: Image.asset(
-            //                   p,
-            //                   fit: BoxFit.cover,
-            //                   width: 584,
-            //                   height: 219,
-            //                 ),
-            //               );
-            //             }).toList(),
-            //             options: CarouselOptions(
-            //               height: 219,
-            //               viewportFraction: 1.0,
-            //               enlargeCenterPage: false,
-            //               padEnds: false,
-            //               autoPlay: true,
-            //               onPageChanged: (i, _) =>
-            //                   setState(() => _currentPopular = i),
-            //             ),
-            //           ),
-            //         ),
-            //       );
-            //     }
-
-            //     return CarouselSlider(
-            //       carouselController: _carouselCtrlmangapop,
-            //       items: imgInformationListmangapop.map((p) {
-            //         return ClipRRect(
-            //           borderRadius: BorderRadius.circular(20),
-            //           child: Container(
-            //             color: Colors.black,
-            //             alignment: Alignment.center,
-            //             child: Image.asset(
-            //               p,
-            //               fit: BoxFit.cover, // หรือ BoxFit.contain
-            //               width: double.infinity,
-            //             ),
-            //           ),
-            //         );
-            //       }).toList(),
-            //       options: CarouselOptions(
-            //         aspectRatio: 16 / 9,
-            //         viewportFraction: 0.9,
-            //         enlargeCenterPage: true,
-            //         padEnds: true,
-            //         autoPlay: true,
-            //         onPageChanged: (i, _) =>
-            //             setState(() => _currentPopular = i),
-            //       ),
-            //     );
-            //   },
-            // ),
-
-            // const SizedBox(height: 8),
-            // AnimatedSmoothIndicator(
-            //   activeIndex: _currentPopular,
-            //   count: imgInformationListmangapop.length,
-            //   effect: const WormEffect(
-            //     dotWidth: 8,
-            //     dotHeight: 8,
-            //     activeDotColor: Color(0xFFF6B606),
-            //   ),
-            //   onDotClicked: (i) => _carouselCtrlmangapop.animateToPage(i),
-            // ),
 
             const SizedBox(height: 16),
 
@@ -364,11 +298,12 @@ class _Home2ScreenState extends State<Home2Screen>
                       width: 150,
                       child: InkWell(
                         onTap: () {
+                          final dbIndex = (manga['__dbIndex'] as int?) ?? 0;
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => MangaDetailPage(
-                                mangaId: manga['id']?.toString() ?? '',
+                                mangaId: dbIndex,
                                 cover: manga['cover'] ?? '',
                                 name: manga['name'] ?? 'ไม่มีชื่อ',
                                 background: manga['background'],
@@ -399,16 +334,19 @@ class _Home2ScreenState extends State<Home2Screen>
                   spacing: 50,
                   runSpacing: 20,
                   alignment: WrapAlignment.spaceBetween,
-                  children: latestUpdatedMangas.take(4).map<Widget>((manga) { // แสดงแค่ 4 เรื่องล่าสุด
+                  children: latestUpdatedMangas.take(4).map<Widget>((manga) {
+                    // แสดงแค่ 4 เรื่องล่าสุด
                     return SizedBox(
                       width: 150,
                       child: InkWell(
                         onTap: () {
+                          final dbIndex = (manga['__dbIndex'] as int?) ?? 0;
+
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => MangaDetailPage(
-                                mangaId: manga['id']?.toString() ?? '',
+                                mangaId: dbIndex,
                                 cover: manga['cover'] ?? '',
                                 name: manga['name'] ?? 'ไม่มีชื่อ',
                                 background: manga['background'],
@@ -420,7 +358,8 @@ class _Home2ScreenState extends State<Home2Screen>
                           children: [
                             _mangaCard(manga['cover'], manga['name']),
                             // แสดงวันที่อัปเดตล่าสุด
-                            if (manga['latestUpdateTime'] != null && manga['latestUpdateTime'] > 0)
+                            if (manga['latestUpdateTime'] != null &&
+                                manga['latestUpdateTime'] > 0)
                               Padding(
                                 padding: const EdgeInsets.only(top: 4),
                                 child: Text(
@@ -557,28 +496,65 @@ class _Home2ScreenState extends State<Home2Screen>
     );
   }
 
-  Widget _chipButton(String label) {
-    return ElevatedButton(
-      onPressed: () {},
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-      ),
-      child: Text(label),
-    );
+  // สร้าง widget สำหรับแสดงรูปภาพใน carousel
+  Widget _buildCarouselImage(String imagePath, double? width, double height) {
+    final imageWidth = (width == null || width == double.infinity)
+        ? null
+        : width;
+
+    if (imagePath.startsWith('lib/assets/')) {
+      // รูปภาพ local assets
+      return Image.asset(
+        imagePath,
+        fit: BoxFit.cover,
+        width: imageWidth,
+        height: height,
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            width: imageWidth,
+            height: height,
+            color: Colors.grey[800],
+            child: const Icon(Icons.broken_image, color: Colors.white70),
+          );
+        },
+      );
+    } else {
+      // รูปภาพจาก URL
+      return Image.network(
+        imagePath,
+        fit: BoxFit.cover,
+        width: imageWidth,
+        height: height,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Container(
+            width: imageWidth,
+            height: height,
+            color: Colors.grey[800],
+            child: const Center(
+              child: CircularProgressIndicator(color: Colors.white),
+            ),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            width: imageWidth,
+            height: height,
+            color: Colors.grey[800],
+            child: const Icon(Icons.broken_image, color: Colors.white70),
+          );
+        },
+      );
+    }
   }
 
   // เพิ่ม function สำหรับแปลง timestamp เป็นวันที่
   String _formatDate(int timestamp) {
     DateTime date = DateTime.fromMillisecondsSinceEpoch(timestamp);
     DateTime now = DateTime.now();
-    
+
     Duration difference = now.difference(date);
-    
+
     if (difference.inDays > 0) {
       return '${difference.inDays} วันที่แล้ว';
     } else if (difference.inHours > 0) {

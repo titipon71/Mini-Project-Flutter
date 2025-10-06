@@ -1,5 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:my_app/screens/onboarding_screen.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:my_app/screens/home2_screen.dart';
+import 'package:my_app/screens/sign_in_screen.dart';
+import 'package:simple_icons/simple_icons.dart';
 import 'welcome_screen.dart'; // ใช้ AbstractBackground + shared atoms
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -21,6 +25,112 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _obscureConfirm = true;
   String? _agreeError;
 
+  Future<void> signInWithGoogle() async {
+    try {
+      if (kIsWeb) {
+        // --- Web ใช้ Popup ---
+        final googleProvider = GoogleAuthProvider();
+        // หากต้องการขอ scope เพิ่มเติม ให้เพิ่มแบบนี้:
+        // googleProvider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+        final userCredential = await FirebaseAuth.instance.signInWithPopup(
+          googleProvider,
+        );
+
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const Home2Screen()),
+          );
+        }
+        return;
+      }
+
+      // --- Android/iOS ใช้ google_sign_in ---
+      final GoogleSignIn googleSignIn = GoogleSignIn(
+        // ถ้าต้องการจำกัด scope เพิ่มเติม:
+        // scopes: ['email', 'https://www.googleapis.com/auth/userinfo.profile'],
+      );
+
+      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+      if (googleUser == null) {
+        // ผู้ใช้กดยกเลิก
+        return;
+      }
+
+      final googleAuth = await googleUser.authentication;
+
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      final userCredential = await FirebaseAuth.instance.signInWithCredential(
+        credential,
+      );
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const Home2Screen()),
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      String msg = 'ไม่สามารถเข้าสู่ระบบด้วย Google ได้';
+      // เคสพบบ่อย ๆ
+      if (e.code == 'account-exists-with-different-credential') {
+        msg = 'อีเมลนี้ผูกกับวิธีเข้าสู่ระบบอื่นอยู่ (เช่น Email/Password)';
+      } else if (e.code == 'popup-closed-by-user') {
+        msg = 'ปิดหน้าต่างก่อนดำเนินการเสร็จ';
+      } else if (e.code == 'web-context-cancelled') {
+        msg = 'การยืนยันตนถูกยกเลิก';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('เกิดข้อผิดพลาด')));
+    }
+  }
+
+  Future<void> signInWithGithub() async {
+    try {
+      if (kIsWeb) {
+        // --- Web ใช้ Popup ---
+        final githubProvider = GithubAuthProvider();
+        // หากต้องการขอ scope เพิ่มเติม ให้เพิ่มแบบนี้:
+        // githubProvider.addScope('repo');
+        final userCredential = await FirebaseAuth.instance.signInWithPopup(
+          githubProvider,
+        );
+
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const Home2Screen()),
+          );
+        }
+        return;
+      }
+
+      // --- Android/iOS ยังไม่รองรับ GitHub Sign-In ---
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('GitHub Sign-In รองรับเฉพาะบนเว็บเท่านั้น')),
+      );
+    } on FirebaseAuthException catch (e) {
+      String msg = 'ไม่สามารถเข้าสู่ระบบด้วย GitHub ได้';
+      // เคสพบบ่อย ๆ
+      if (e.code == 'account-exists-with-different-credential') {
+        msg = 'อีเมลนี้ผูกกับวิธีเข้าสู่ระบบอื่นอยู่ (เช่น Email/Password)';
+      } else if (e.code == 'popup-closed-by-user') {
+        msg = 'ปิดหน้าต่างก่อนดำเนินการเสร็จ';
+      } else if (e.code == 'web-context-cancelled') {
+        msg = 'การยืนยันตนถูกยกเลิก';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('เกิดข้อผิดพลาด')));
+    }
+  }
+
   Future<void> registerWithEmail() async {
     try {
       final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
@@ -33,7 +143,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       // ไปหน้า onboarding
       if (mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const OnboardingScreen()),
+          MaterialPageRoute(builder: (_) => const Home2Screen()),
         );
       }
     } on FirebaseAuthException catch (e) {
@@ -142,7 +252,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                   fontSize: 22,
                                 ),
                               ),
-                              const SizedBox(height: 22),
+                              const SizedBox(height: 16),
                               AppTextField(
                                 label: 'Full Name',
                                 hint: 'Enter Full Name',
@@ -228,22 +338,70 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                 child: FilledButton(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor:
-                                        const Color.fromARGB(255, 0, 66, 234),
+                                        Color(0xFFF6B606),
                                   ),
                                   onPressed: _submit,
-                                  child: const Text('Sign up'),
+                                  child: const Text('Sign up',style: TextStyle(color: Colors.white,fontWeight: FontWeight.w600, fontSize: 16)),
                                 ),
                               ),
                               const SizedBox(height: 16),
-                              const DividerWithText('Sign up with'),
-                              const SizedBox(height: 12),
-                              const SocialRow(),
-                              const SizedBox(height: 10),
+                                const DividerWithText('Sign Up with'),
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  height: 48,
+                                  child: OutlinedButton(
+                                    onPressed: signInWithGoogle,
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.g_mobiledata, size: 30, fill: 1, textDirection: TextDirection.rtl), // ใส่ไอคอนของคุณ
+                                        const Text('Continue with Google'),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(height: 10),
+                                SizedBox(
+                                  height: 48,
+                                  child: OutlinedButton(
+                                    onPressed: signInWithGithub,
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(SimpleIcons.github, size: 20, textDirection: TextDirection.ltr), // ใส่ไอคอนของคุณ
+                                        const Text('  Continue with Github'),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
-                                children: const [
-                                  Text('Already have an account? '),
-                                  LinkText('Sign in'),
+                                children: [
+                                  const Text('Already have an account? '),
+                                  TextButton(
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                           MaterialPageRoute(
+                                            builder: (_) =>
+                                                const SignInScreen(),
+                                          ),
+                                        );
+                                      },
+                                      child: const Text(
+                                        'Sign In',
+                                        style: TextStyle(
+                                          color: Color(0xFFF6B606),
+                                          decoration: TextDecoration.underline,
+                                          decorationColor: Color(0xFFF6B606),
+                                          decorationStyle:
+                                              TextDecorationStyle.solid,
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ],

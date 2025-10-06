@@ -8,12 +8,7 @@ import 'package:my_app/screens/topup_screen.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
-
-// ถ้าใช้งานจริง ให้เปิดคอมเมนต์และเพิ่มใน pubspec.yaml ด้วย
-// google_sign_in: ^6.2.1
-// flutter_facebook_auth: ^6.0.4
-// import 'package:google_sign_in/google_sign_in.dart';
-// import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
+import 'package:my_app/helpers/user_role_extension.dart'; // .isAdmin(), .isVIP()
 
 class ExampleSidebarX extends StatefulWidget {
   const ExampleSidebarX({super.key, required this.controller});
@@ -24,24 +19,45 @@ class ExampleSidebarX extends StatefulWidget {
 }
 
 class _ExampleSidebarXState extends State<ExampleSidebarX> {
-  // ฟังการเปลี่ยนแปลงสถานะล็อกอินแบบ real-time
   final Stream<User?> _auth$ = FirebaseAuth.instance.authStateChanges();
 
-  Future<void> signOutFromAllProviders() async {
-    // ออกจาก Firebase (ครอบคลุม GitHub/OAuth ส่วนใหญ่)
-    await FirebaseAuth.instance.signOut();
+  bool _isAdmin = false;
+  bool _loadingRole = true;
+  String? _lastUid; // ใช้ตรวจว่า user เปลี่ยนหรือยัง
 
-    // ถ้าแอปคุณมีลง Google/Facebook ไว้ ให้เอาคอมเมนต์ออก:
+  @override
+  void initState() {
+    super.initState();
+    _loadUserRole(); // เผื่อกรณีมี user อยู่แล้ว
+  }
+
+  Future<void> _loadUserRole() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() {
+        _isAdmin = false;
+        _loadingRole = false;
+        _lastUid = null;
+      });
+      return;
+    }
+    final isAdmin = await user.isAdmin(); // (รีเฟรช token ภายใน)
+    if (!mounted) return;
+    setState(() {
+      _isAdmin = isAdmin;
+      _loadingRole = false;
+      _lastUid = user.uid;
+    });
+  }
+
+  Future<void> signOutFromAllProviders() async {
+    await FirebaseAuth.instance.signOut();
     try {
       final googleSignIn = GoogleSignIn();
       if (await googleSignIn.isSignedIn()) {
         await googleSignIn.disconnect();
       }
     } catch (_) {}
-
-    //   try {
-    //     await FacebookAuth.instance.logOut();
-    //   } catch (_) {}
   }
 
   @override
@@ -50,12 +66,19 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
       stream: _auth$,
       builder: (context, snapshot) {
         final user = snapshot.data;
-        final bool isSignedIn = user != null;
+        final isSignedIn = user != null;
 
+        // ถ้า user เปลี่ยน (login/logout/switch) ให้โหลด role ใหม่ 1 ครั้ง
+        if (user?.uid != _lastUid) {
+          _loadingRole = true; // ป้องกันกระพริบ
+          // รันแบบ async เล็กน้อยเพื่อไม่บล็อค build
+          WidgetsBinding.instance.addPostFrameCallback((_) => _loadUserRole());
+        }
+
+        // ชื่อที่จะแสดง
         final String displayName = () {
           final direct = user?.displayName?.trim();
           if (direct != null && direct.isNotEmpty) return direct;
-          // บาง provider (เช่น GitHub) อาจเก็บชื่อไว้ใน providerData
           final fromProvider = user?.providerData
               .map((p) => p.displayName)
               .firstWhere(
@@ -66,20 +89,16 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
           return user?.email ?? 'User';
         }();
 
-        // สร้างรายการเมนูแบบไดนามิก
+        // สร้างรายการเมนูตามสถานะ
         final List<SidebarXItem> items = [
-          // ✅ แสดงชื่อผู้ใช้เป็นรายการแรก เมื่อ "ล็อกอินแล้ว"
           if (isSignedIn)
             SidebarXItem(
               icon: Icons.account_circle,
               label: displayName,
-              onTap: () {
-                // TODO: ไปหน้าโปรไฟล์ถ้ามี
-                // Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
-              },
+              onTap: () {},
             ),
           if (isSignedIn)
-             SidebarXItem(
+            SidebarXItem(
               icon: Icons.home,
               label: 'Home',
               onTap: () {
@@ -89,7 +108,6 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
                 );
               },
             ),
-          // ✅ ซ่อน Sign In/Sign Up เมื่อ "ล็อกอินแล้ว"
           if (!isSignedIn)
             SidebarXItem(
               icon: Icons.login,
@@ -97,7 +115,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => SignInScreen()),
+                  MaterialPageRoute(builder: (_) => SignInScreen()),
                 );
               },
             ),
@@ -108,11 +126,10 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => SignUpScreen()),
+                  MaterialPageRoute(builder: (_) => SignUpScreen()),
                 );
               },
             ),
-
           SidebarXItem(
             icon: Icons.workspace_premium,
             label: 'Top up VIP',
@@ -120,7 +137,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
               if (isSignedIn) {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => TopupScreen()),
+                  MaterialPageRoute(builder: (_) => TopupScreen()),
                 );
               } else {
                 _showNeedSignInDialog(context, 'Top up VIP');
@@ -135,6 +152,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
               if (await canLaunchUrl(url)) {
                 await launchUrl(url, mode: LaunchMode.externalApplication);
               } else {
+                if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('Could not launch $url')),
                 );
@@ -146,42 +164,39 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
             label: 'Settings',
             onTap: () {
               if (isSignedIn) {
-                // TODO: เปลี่ยนไปหน้า Settings จริงของคุณ
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => TopupScreen()),
+                  MaterialPageRoute(builder: (_) => TopupScreen()),
                 );
               } else {
                 _showNeedSignInDialog(context, 'Settings');
               }
             },
           ),
-
-          // ✅ โชว์ปุ่ม Sign Out เฉพาะตอน "ล็อกอินแล้ว"
           if (isSignedIn)
             SidebarXItem(
               icon: Icons.logout,
               label: 'Sign Out',
               onTap: () async {
                 await signOutFromAllProviders();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Signed out successfully')),
-                  );
-                }
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Signed out successfully')),
+                );
               },
             ),
-
-          SidebarXItem(
-            icon: Icons.engineering,
-            label: 'Developer',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const AdminDashboard()),
-              );
-            },
-          ),
+          // ✅ โชว์เฉพาะแอดมิน — ใช้ค่า `_isAdmin` ที่ cache แล้ว
+          if (_isAdmin && !_loadingRole)
+            SidebarXItem(
+              icon: Icons.engineering,
+              label: 'Developer',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AdminDashboard()),
+                );
+              },
+            ),
         ];
 
         return SidebarX(
@@ -191,14 +206,9 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
           theme: SidebarXTheme(
             decoration: const BoxDecoration(color: Colors.black),
             width: 250,
-            itemPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 8,
-            ),
-            selectedItemPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 8,
-            ),
+            itemPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            selectedItemPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             itemTextPadding: const EdgeInsets.only(left: 16),
             selectedItemTextPadding: const EdgeInsets.only(left: 16),
             iconTheme: const IconThemeData(color: Colors.white),
@@ -206,9 +216,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
             hoverColor: Colors.grey[900],
             hoverIconTheme: const IconThemeData(color: Colors.white),
             hoverTextStyle: const TextStyle(color: Colors.white),
-            selectedItemDecoration: const BoxDecoration(
-              color: Colors.transparent,
-            ),
+            selectedItemDecoration: const BoxDecoration(color: Colors.transparent),
             selectedIconTheme: const IconThemeData(color: Colors.white),
             selectedTextStyle: const TextStyle(color: Colors.white),
             itemDecoration: const BoxDecoration(color: Colors.transparent),
@@ -216,10 +224,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
           extendedTheme: const SidebarXTheme(
             width: 250,
             decoration: BoxDecoration(color: Colors.black),
-            selectedItemPadding: EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 8,
-            ),
+            selectedItemPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             itemTextPadding: EdgeInsets.only(left: 16),
             selectedItemTextPadding: EdgeInsets.only(left: 16),
           ),
@@ -228,9 +233,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
               height: 100,
               child: Padding(
                 padding: EdgeInsets.all(16.0),
-                child: Center(
-                  child: Icon(Icons.menu, color: Colors.white, size: 24),
-                ),
+                child: Center(child: Icon(Icons.menu, color: Colors.white, size: 24)),
               ),
             );
           },
@@ -240,29 +243,24 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
     );
   }
 
-  void _showNeedSignInDialog(BuildContext context, String featureName) {
+  void _showNeedSignInDialog(BuildContext context, String actionName) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: const Text(
-            'Not Signed In',
-            style: TextStyle(color: Colors.white),
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text('Not Signed In', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Please sign in to access "$actionName".',
+          style: const TextStyle(color: Colors.white),
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.white),
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
           ),
-          content: Text(
-            'Please sign in to access the $featureName feature.',
-            style: const TextStyle(color: Colors.white),
-          ),
-          actions: [
-            TextButton(
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
-              child: const Text('OK'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ],
-        );
-      },
+        ],
+      ),
     );
   }
 }

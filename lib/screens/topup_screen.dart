@@ -1,12 +1,20 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:my_app/assets/widgets/example_sidebarx.dart';
+import 'package:my_app/screens/home2_screen.dart';
 import 'package:my_app/screens/navbar2_screen.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'package:step_progress/step_progress.dart';
 import 'dart:convert';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:image_gallery_saver/image_gallery_saver.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:thaiqr/thaiqr.dart';
+import 'dart:html' as html;
 
 class SubscriptionOption {
   final String label;
@@ -25,6 +33,7 @@ class TopupScreen extends StatefulWidget {
 }
 
 class _TopupScreenState extends State<TopupScreen> {
+  final GlobalKey _qrKey = GlobalKey();
   final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final stepProgressController = StepProgressController(
     totalSteps: 3,
@@ -51,6 +60,51 @@ class _TopupScreenState extends State<TopupScreen> {
 
   // ถ้าต้องการรู้ current step จาก controller ให้ลองฟัง listener
   int currentStep = 0;
+
+  Future<void> _saveQrToGallery() async {
+  try {
+    // 🔹 1. แปลง Widget เป็น PNG bytes
+    final boundary = _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    final bytes = byteData!.buffer.asUint8List();
+
+    final filename = 'promptpay_${DateTime.now().millisecondsSinceEpoch}.png';
+
+    // 🔹 2. แยกตาม Platform
+    if (kIsWeb) {
+      // ======= 🌐 WEB =======
+      final blob = html.Blob([bytes], 'image/png');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute('download', filename)
+        ..click();
+      html.Url.revokeObjectUrl(url);
+
+      _showSnack('✅ ดาวน์โหลด QR เรียบร้อย');
+    } else {
+      // ======= 📱 MOBILE =======
+      // ขอ permission สำหรับ Android (ไม่บังคับใน iOS)
+      final status = await Permission.storage.request();
+      if (!status.isGranted) {
+        _showSnack('ไม่ได้รับสิทธิ์บันทึกไฟล์');
+        return;
+      }
+
+      final result = await ImageGallerySaver.saveImage(
+        bytes,
+        name: filename,
+        quality: 100,
+      );
+
+      final ok = (result is Map) && (result['isSuccess'] == true || result['filePath'] != null);
+      _showSnack(ok ? '✅ บันทึก QR ลงแกลเลอรีแล้ว' : '❌ บันทึกไม่สำเร็จ');
+    }
+  } catch (e) {
+    _showSnack('เกิดข้อผิดพลาด: $e');
+  }
+}
+
 
   final List<SubscriptionOption> options = [
     SubscriptionOption("2 วัน", "฿99", 0),
@@ -187,10 +241,6 @@ class _TopupScreenState extends State<TopupScreen> {
       _showSnack("กรุณาเลือกวิธีชำระเงิน");
       return;
     }
-    if (!agreeTnC) {
-      _showSnack("กรุณายอมรับเงื่อนไขการให้บริการ");
-      return;
-    }
 
     if (selectedPayment == 0) {
       _showPromptPayQR(context); // แสดง QR เฉพาะกรณี PromptPay เท่านั้น
@@ -259,6 +309,12 @@ class _TopupScreenState extends State<TopupScreen> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
+        actionsAlignment: MainAxisAlignment.center, // จัดกึ่งกลาง
+        actionsOverflowButtonSpacing: 12, // ระยะห่างเมื่อพับบรรทัด
+        actionsOverflowDirection:
+            VerticalDirection.down, // ถ้าล้น ให้ขึ้นบรรทัดใหม่ลงล่าง
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+
         backgroundColor: Colors.grey[900],
         title: const Text(
           "สแกนชำระด้วย PromptPay",
@@ -266,21 +322,36 @@ class _TopupScreenState extends State<TopupScreen> {
         ),
         content: SingleChildScrollView(
           child: SizedBox(
-            width: 300,
+            width: 350,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox.square(
-                  dimension: 220,
-                  child: QrImageView(
-                    data: payload,
-                    version: QrVersions.auto,
-                    backgroundColor: Colors.white,
+                RepaintBoundary(
+                  key: _qrKey,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white, // 🔹 สีพื้นหลัง
+                      borderRadius: BorderRadius.circular(12), // 🔹 มุมโค้ง
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 6,
+                          offset: Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.all(16),
+                    child: ThaiQRWidget(
+                      showHeader: false,
+                      mobileOrId: "0876947022",
+                      amount: _parsePrice(opt.price).toString(),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 8),
+
+                SizedBox(height: 8),
                 Text(
-                  "ยอดชำระ: ${opt.price}\nอ้างอิง: ${userId ?? ''}-${opt.value}",
+                  "ยอดชำระ: ${opt.price}",
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white70),
                 ),
@@ -289,29 +360,76 @@ class _TopupScreenState extends State<TopupScreen> {
           ),
         ),
         actions: [
+          // 🔹 บรรทัดแรก: ปุ่มสลิปกับ QR
           if (selectedPayment == 0 || selectedPayment == 2)
-                  Column(
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: () {
-                          // TODO: เขียนโค้ดเลือกไฟล์ / อัปโหลดสลิป
-                        },
-                        icon: const Icon(Icons.upload_file, color: Colors.white),
-                        label: const Text("อัปโหลดสลิป",
-                            style: TextStyle(color: Colors.white)),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 12,
-                          ),
-                          backgroundColor: myColor,
-                        ),
-                      ),
-                    ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: myColor,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                   ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text("ปิด", style: TextStyle(color: Colors.white)),
+                  onPressed: () {},
+                  icon: const Icon(Icons.upload, color: Colors.white),
+                  label: const Text(
+                    "อัปโหลดสลิป",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+                SizedBox(width: 16),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.lightBlue[800],
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  icon: const Icon(Icons.save, color: Colors.white),
+                  onPressed: _saveQrToGallery,
+                  label: const Text(
+                    "QR code",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+
+          // 🔹 บรรทัดที่สอง: ปุ่ม “ปิด” กับ “ยืนยัน” อยู่ใน Row เดียวกัน
+          Padding(
+            padding: const EdgeInsets.only(top: 12.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text(
+                    "ปิด",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home2Screen()));
+                  },
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                  ),
+                  child: const Text(
+                    "ยืนยัน",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -473,194 +591,202 @@ class _TopupScreenState extends State<TopupScreen> {
   }
 
   Widget _buildPaymentStep() {
-  final opt = selectedOption;
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text(
-        'ชำระเงิน',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
+    final opt = selectedOption;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'ชำระเงิน',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+          ),
+          textAlign: TextAlign.center,
         ),
-        textAlign: TextAlign.center,
-      ),
-      const SizedBox(height: 16),
-      Card(
-        color: Colors.grey[900],
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: DefaultTextStyle(
-            style: const TextStyle(color: Colors.white70),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "สรุปยอดชำระ",
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _rowItem("แพ็กเกจ", opt?.label ?? "-"),
-                _rowItem("ราคา", opt?.price ?? "-"),
-                if (referral != null && referral!.isNotEmpty)
-                  _rowItem("รหัสอ้างอิง", referral!),
-                const Divider(height: 24),
-                const Text(
-                  "เลือกวิธีชำระเงิน",
-                  style: TextStyle(color: Colors.white),
-                ),
-                const SizedBox(height: 8),
-
-                // ================= วิธีชำระเงิน =================
-                Card(
-                  color: Colors.black,
-                  child: RadioListTile<int>(
-                    activeColor: myColor,
-                    value: 0,
-                    groupValue: selectedPayment,
-                    onChanged: (v) => setState(() => selectedPayment = v!),
-                    title: const Text("PromptPay",
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: const Text("สแกน QR พร้อมเพย์",
-                        style: TextStyle(color: Colors.white70)),
-                  ),
-                ),
-                Card(
-                  color: Colors.black,
-                  child: RadioListTile<int>(
-                    activeColor: myColor,
-                    value: 1,
-                    groupValue: selectedPayment,
-                    onChanged: (v) => setState(() => selectedPayment = v!),
-                    title: const Text("บัตรเครดิต/เดบิต",
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: const Text("Visa / MasterCard",
-                        style: TextStyle(color: Colors.white70)),
-                  ),
-                ),
-                Card(
-                  color: Colors.black,
-                  child: RadioListTile<int>(
-                    activeColor: myColor,
-                    value: 2,
-                    groupValue: selectedPayment,
-                    onChanged: (v) => setState(() => selectedPayment = v!),
-                    title: const Text("โอนเงินผ่านธนาคาร",
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: const Text("อัปโหลดสลิปหลังโอน",
-                        style: TextStyle(color: Colors.white70)),
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // ================= เงื่อนไขเพิ่มเติม =================
-                
-
-                if (selectedPayment == 1)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("ข้อมูลบัตรเครดิต",
-                          style: TextStyle(color: Colors.white)),
-                      const SizedBox(height: 8),
-                      TextField(
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: "หมายเลขบัตร",
-                          labelStyle: TextStyle(color: Colors.white70),
-                          enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white54)),
-                        ),
-                        keyboardType: TextInputType.number,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                labelText: "MM/YY",
-                                labelStyle: TextStyle(color: Colors.white70),
-                                enabledBorder: OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: Colors.white24)),
-                                focusedBorder: OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: Colors.white54)),
-                              ),
-                              keyboardType: TextInputType.number,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                labelText: "CVV",
-                                labelStyle: TextStyle(color: Colors.white70),
-                                enabledBorder: OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: Colors.white24)),
-                                focusedBorder: OutlineInputBorder(
-                                    borderSide:
-                                        BorderSide(color: Colors.white54)),
-                              ),
-                              keyboardType: TextInputType.number,
-                              obscureText: true,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      TextField(
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: "ชื่อบนบัตร",
-                          labelStyle: TextStyle(color: Colors.white70),
-                          enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.white54)),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                // const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Checkbox(
-                      activeColor: myColor,
-                      value: agreeTnC,
-                      onChanged: (v) => setState(() => agreeTnC = v ?? false),
+        const SizedBox(height: 16),
+        Card(
+          color: Colors.grey[900],
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: DefaultTextStyle(
+              style: const TextStyle(color: Colors.white70),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "สรุปยอดชำระ",
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
                     ),
-                    const Expanded(
-                      child: Text(
-                        "ฉันยอมรับเงื่อนไขการให้บริการ และนโยบายความเป็นส่วนตัว",
+                  ),
+                  const SizedBox(height: 8),
+                  _rowItem("แพ็กเกจ", opt?.label ?? "-"),
+                  _rowItem("ราคา", opt?.price ?? "-"),
+                  if (referral != null && referral!.isNotEmpty)
+                    _rowItem("รหัสอ้างอิง", referral!),
+                  const Divider(height: 24),
+                  const Text(
+                    "เลือกวิธีชำระเงิน",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ================= วิธีชำระเงิน =================
+                  Card(
+                    color: Colors.black,
+                    child: RadioListTile<int>(
+                      activeColor: myColor,
+                      value: 0,
+                      groupValue: selectedPayment,
+                      onChanged: (v) => setState(() => selectedPayment = v!),
+                      title: const Text(
+                        "PromptPay",
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      subtitle: const Text(
+                        "สแกน QR พร้อมเพย์",
                         style: TextStyle(color: Colors.white70),
                       ),
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  Card(
+                    color: Colors.black,
+                    child: RadioListTile<int>(
+                      activeColor: myColor,
+                      value: 1,
+                      groupValue: selectedPayment,
+                      onChanged: (v) => setState(() => selectedPayment = v!),
+                      title: const Text(
+                        "บัตรเครดิต/เดบิต",
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      subtitle: const Text(
+                        "Visa / MasterCard",
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ),
+                  Card(
+                    color: Colors.black,
+                    child: RadioListTile<int>(
+                      activeColor: myColor,
+                      value: 2,
+                      groupValue: selectedPayment,
+                      onChanged: (v) => setState(() => selectedPayment = v!),
+                      title: const Text(
+                        "โอนเงินผ่านธนาคาร",
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      subtitle: const Text(
+                        "อัปโหลดสลิปหลังโอน",
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ================= เงื่อนไขเพิ่มเติม =================
+                  if (selectedPayment == 1)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "ข้อมูลบัตรเครดิต",
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            labelText: "หมายเลขบัตร",
+                            labelStyle: TextStyle(color: Colors.white70),
+                            enabledBorder: OutlineInputBorder(
+                              borderSide: BorderSide(color: Colors.white24),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderSide: BorderSide(color: Colors.white54),
+                            ),
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(
+                                  labelText: "MM/YY",
+                                  labelStyle: TextStyle(color: Colors.white70),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: Colors.white24,
+                                    ),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: Colors.white54,
+                                    ),
+                                  ),
+                                ),
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(
+                                  labelText: "CVV",
+                                  labelStyle: TextStyle(color: Colors.white70),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: Colors.white24,
+                                    ),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderSide: BorderSide(
+                                      color: Colors.white54,
+                                    ),
+                                  ),
+                                ),
+                                keyboardType: TextInputType.number,
+                                obscureText: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            labelText: "ชื่อบนบัตร",
+                            labelStyle: TextStyle(color: Colors.white70),
+                            enabledBorder: OutlineInputBorder(
+                              borderSide: BorderSide(color: Colors.white24),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderSide: BorderSide(color: Colors.white54),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                  // const SizedBox(height: 8),
+                ],
+              ),
             ),
           ),
         ),
-      ),
-    ],
-  );
-}
-
+      ],
+    );
+  }
 
   Widget _rowItem(String label, String value) {
     return Padding(

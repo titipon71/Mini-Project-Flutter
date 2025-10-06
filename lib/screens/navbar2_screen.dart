@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 
@@ -28,11 +27,7 @@ class _Navbar2State extends State<Navbar2> with SingleTickerProviderStateMixin {
   bool isLoading = true;
 
   Future<void> fetchMangaDB() async {
-    final databaseRef = FirebaseDatabase.instanceFor(
-      app: Firebase.app(),
-      databaseURL:
-          'https://flutterapp-3d291-default-rtdb.asia-southeast1.firebasedatabase.app/',
-    ).ref('mangas');
+    final databaseRef = FirebaseDatabase.instance.ref('mangas');
 
     final snapshot = await databaseRef.get();
 
@@ -194,10 +189,7 @@ InlineSpan _highlightText(String? text, String query) {
   Timer? debouncer;
 
   // อ้างอิง DB
-  final ref = FirebaseDatabase.instanceFor(
-    app: Firebase.app(),
-    databaseURL: 'https://flutterapp-3d291-default-rtdb.asia-southeast1.firebasedatabase.app/',
-  ).ref('mangas');
+  final ref = FirebaseDatabase.instance.ref('mangas');
 
   void onQueryChanged(void Function(void Function()) setDialogState, String text) {
     debouncer?.cancel();
@@ -455,8 +447,8 @@ InlineSpan _highlightText(String? text, String query) {
                       top: 0,
                       width: width,
                       height: widget.height,
-                      child: Image.asset(
-                        'lib/assets/images/top.jpg',
+                      child: Image.network(
+                        'https://raw.githubusercontent.com/titipon71/Flutter-images/refs/heads/main/top.jpg',
                         fit: BoxFit.cover,
                       ),
                     ),
@@ -465,8 +457,8 @@ InlineSpan _highlightText(String? text, String query) {
                       top: 0,
                       width: width,
                       height: widget.height,
-                      child: Image.asset(
-                        'lib/assets/images/top.jpg',
+                      child: Image.network(
+                        'https://raw.githubusercontent.com/titipon71/Flutter-images/refs/heads/main/top.jpg',
                         fit: BoxFit.cover,
                       ),
                     ),

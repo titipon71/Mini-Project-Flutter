@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:my_app/screens/ChapterReaderPage.dart';
 
 class MangaDetailPage extends StatefulWidget {
-  final String mangaId;
+  final int mangaId; // index จริงใน DB (เริ่มที่ 1)
   final String cover;
   final String name;
   final String? background;
@@ -21,84 +21,126 @@ class MangaDetailPage extends StatefulWidget {
 }
 
 class _MangaDetailPageState extends State<MangaDetailPage> {
-  List<Map<String, dynamic>> chapters = [];
-  bool isLoading = true;
+  List<Map<String, dynamic>> _chapters = [];
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    fetchChapters();
+    _load();
   }
 
-  Future<void> fetchChapters() async {
+  // ---------- helpers ----------
+  int? _toInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is double) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
+  }
+
+  String _formatUpdatedAt(dynamic v) {
+    final ms = _toInt(v);
+    if (ms == null || ms <= 0) return '—';
     try {
-      final databaseRef = FirebaseDatabase.instanceFor(
-        app: Firebase.app(),
-        databaseURL:
-            'https://flutterapp-3d291-default-rtdb.asia-southeast1.firebasedatabase.app/',
-      ).ref('mangas');
+      final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+      return dt.toString(); // ปรับรูปแบบวันที่ได้ตามต้องการ
+    } catch (_) {
+      return '—';
+    }
+  }
 
-      final snapshot = await databaseRef.get();
+  Future<void> _load() async {
+    try {
+      final chapters = await _fetchChaptersRobust(widget.mangaId);
+      
+      // ✅ sort: ตอนน้อยไปมาก (1 → 2 → 3 ...)
+    chapters.sort((a, b) {
+      final na = _toInt(a['number'])?? 0;
+      final nb = _toInt(b['number'])?? 0;
+      return na.compareTo(nb); // ← แก้ตรงนี้ (จากเดิม ub.compareTo(ua))
+    });
 
-      if (snapshot.exists) {
-        final value = snapshot.value;
-        List<Map<String, dynamic>> chapterList = [];
-
-        if (value is List) {
-          // หา manga ที่ตรงกับ name
-          for (var manga in value) {
-            if (manga != null && manga['name'] == widget.name) {
-              var mangaChapters = manga['chapters'];
-              if (mangaChapters is List) {
-                chapterList = mangaChapters
-                    .where((ch) => ch != null) // กรอง null ออก
-                    .map((ch) => Map<String, dynamic>.from(ch))
-                    .toList();
-              }
-              break;
-            }
-          }
-        }
-
-        setState(() {
-          chapters = chapterList;
-          isLoading = false;
-        });
-      } else {
-        setState(() {
-          chapters = [];
-          isLoading = false;
-        });
-      }
-    } catch (e) {
-      print('Error fetching chapters: $e');
       setState(() {
-        chapters = [];
-        isLoading = false;
+        _chapters = chapters;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
       });
     }
+  }
+
+  /// อ่าน chapters แบบ robust: รองรับทั้ง List 1-based และ Map
+  Future<List<Map<String, dynamic>>> _fetchChaptersRobust(int mangaId) async {
+    final ref = FirebaseDatabase.instance.ref('mangas/$mangaId/chapters');
+    final snap = await ref.get();
+
+    final out = <Map<String, dynamic>>[];
+    if (!snap.exists) return out;
+
+    final data = snap.value;
+
+    // กรณีเป็น List และ index 0 = null (โครงสร้าง 1-based)
+    if (data is List) {
+      for (var i = 1; i < data.length; i++) {
+        final item = data[i];
+        if (item is Map) {
+          final m = Map<String, dynamic>.from(
+            item.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          m['__dbIndex'] = i; // เก็บ index จริงใน DB
+          out.add(m);
+        }
+      }
+      return out;
+    }
+
+    // กรณีเป็น Map (key เป็น "1","2",…)
+    if (data is Map) {
+      data.forEach((k, v) {
+        if (v is Map) {
+          final m = Map<String, dynamic>.from(
+            v.map((kk, vv) => MapEntry(kk.toString(), vv)),
+          );
+          final idx = _toInt(k) ?? 0;
+          if (idx > 0) m['__dbIndex'] = idx;
+          out.add(m);
+        }
+      });
+      return out;
+    }
+
+    return out;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.name) ,backgroundColor: Colors.black,foregroundColor: Colors.white,),
+      appBar: AppBar(
+        title: Text(widget.name),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+      ),
       body: Container(
         width: double.infinity,
         height: double.infinity,
         decoration: BoxDecoration(
-          image: widget.background != null && widget.background!.isNotEmpty
+          image: (widget.background != null && widget.background!.isNotEmpty)
               ? DecorationImage(
                   image: NetworkImage(widget.background!),
                   fit: BoxFit.cover,
                   colorFilter: const ColorFilter.mode(
-                    Color.fromARGB(200, 0, 0, 0),
+                    Color.fromARGB(200, 0, 0, 0), // ทำให้ภาพมืดลง
                     BlendMode.darken,
                   ),
                 )
               : null,
-          color: widget.background == null || widget.background!.isEmpty 
-              ? Colors.grey[900] 
+          color: (widget.background == null || widget.background!.isEmpty)
+              ? Colors.grey[900]
               : null,
         ),
         child: Center(
@@ -108,6 +150,7 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
               mainAxisAlignment: MainAxisAlignment.start,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                // ปก
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8.0),
                   child: widget.cover.isNotEmpty
@@ -131,6 +174,8 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                         ),
                 ),
                 const SizedBox(height: 16),
+
+                // ชื่อเรื่อง
                 Text(
                   widget.name,
                   style: const TextStyle(
@@ -138,26 +183,36 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
+                  textAlign: TextAlign.center,
                 ),
+
                 const SizedBox(height: 16),
-                
-                // แสดง loading หรือ chapters
-                if (isLoading)
-                  const CircularProgressIndicator()
-                else if (chapters.isEmpty)
+
+                // แสดงสถานะโหลด/ผิดพลาด/ว่าง/รายการตอน
+                if (_loading) ...[
+                  const CircularProgressIndicator(),
+                ] else if (_error != null) ...[
+                  Text(
+                    'เกิดข้อผิดพลาด: $_error',
+                    style: TextStyle(
+                      color: Colors.red[200],
+                      fontSize: 16,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ] else if (_chapters.isEmpty) ...[
                   Text(
                     'ไม่มีตอนให้อ่าน',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.7),
                       fontSize: 16,
                     ),
-                  )
-                else ...[
-                  // หัวข้อ
+                  ),
+                ] else ...[
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'ตอนทั้งหมด (${chapters.length} ตอน)',
+                      'ตอนทั้งหมด (${_chapters.length} ตอน)',
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.9),
                         fontSize: 16,
@@ -167,15 +222,27 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                   ),
                   const SizedBox(height: 8),
 
-                  // ปุ่มตอนแบบ Wrap
+                  // ปุ่มตอนแบบ Wrap + OutlinedButton
                   Wrap(
                     spacing: 12,
                     runSpacing: 12,
-                    children: chapters.map((ch) {
+                    children: _chapters.map((ch) {
+                      final numberInt = _toInt(ch['number']) ??
+                          (_chapters.indexOf(ch) + 1);
+                      final title =
+                          (ch['title'] as String?)?.trim() ?? '';
+
+                      // pages: กัน null และนับเฉพาะที่ไม่ใช่ null (เผื่อเอาไว้เช็ค)
+                      final pages = ch['pages'];
+                      final hasAnyPage = (pages is List) &&
+                          pages.where((e) => e != null).isNotEmpty;
+
                       return OutlinedButton(
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.white,
-                          side: BorderSide(color: Colors.white.withOpacity(0.6)),
+                          side: BorderSide(
+                            color: Colors.white.withOpacity(0.6),
+                          ),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
                             vertical: 10,
@@ -185,20 +252,29 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                           ),
                         ),
                         onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChapterReaderPage(
-                                mangaName: widget.name,
-                                chapterId: ch['number']?.toString() ?? '',
-                                chapterTitle: ch['title'] ?? 'ไม่มีชื่อตอน',
-                                chapterNumber: ch['number'] ?? 0,
-                                pages: ch['pages'] ?? [], // ส่งข้อมูลหน้าไปด้วย
+                          if (hasAnyPage) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ChapterReaderPage(
+                                  mangaName: widget.name,
+                                  chapterNumber: numberInt,
+                                ),
                               ),
-                            ),
-                          );
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('ตอนนี้ยังไม่มีหน้าให้แสดง'),
+                              ),
+                            );
+                          }
                         },
-                        child: Text('${ch['title'] ?? 'ตอนที่ ${ch['number'] ?? '?'}'}'),
+                        child: Text(
+                          title.isNotEmpty
+                              ? title
+                              : 'ตอนที่ $numberInt',
+                        ),
                       );
                     }).toList(),
                   ),
@@ -208,102 +284,6 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// หน้าสำหรับอ่านตอน
-class ChapterReaderPage extends StatelessWidget {
-  final String mangaName;
-  final String chapterId;
-  final String chapterTitle;
-  final int chapterNumber;
-  final List<dynamic> pages; // เพิ่มข้อมูลหน้า
-
-  const ChapterReaderPage({
-    super.key,
-    required this.mangaName,
-    required this.chapterId,
-    required this.chapterTitle,
-    required this.chapterNumber,
-    this.pages = const [],
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('$mangaName - $chapterTitle'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-      ),
-      backgroundColor: Colors.black,
-      body: pages.isNotEmpty
-    ? ListView.builder(
-        padding: EdgeInsets.zero,
-        itemCount: pages.length,
-        itemBuilder: (context, index) {
-          final page = pages[index];
-          if (page != null &&
-              page['type'] == 'image' &&
-              page['url'] != null) {
-            final screenWidth = MediaQuery.of(context).size.width;
-
-            return Image.network(
-              page['url'],
-              width: screenWidth,
-              fit: BoxFit.fitWidth, // รูปเต็มความกว้างหน้าจอ
-              alignment: Alignment.topCenter,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  height: 300,
-                  color: Colors.grey[800],
-                  child: const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.error, color: Colors.white, size: 50),
-                        SizedBox(height: 8),
-                        Text(
-                          'ไม่สามารถโหลดรูปภาพได้',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
-                return const SizedBox(
-                  height: 300,
-                  child: Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  ),
-                );
-              },
-            );
-          }
-
-          return Container(
-            height: 300,
-            color: Colors.grey[800],
-            child: const Center(
-              child: Text(
-                'ไม่สามารถแสดงหน้านี้ได้',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          );
-        },
-      )
-    : const Center(
-        child: Text(
-          'ไม่มีเนื้อหาให้แสดง',
-          style: TextStyle(fontSize: 16, color: Colors.white),
-          textAlign: TextAlign.center,
         ),
       ),
     );

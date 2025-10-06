@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:my_app/screens/home2_screen.dart';
 import 'package:my_app/screens/sign_up_screen.dart';
+import 'package:simple_icons/simple_icons.dart';
 // import 'package:my_app/screens/onboarding_screen.dart';
 import 'welcome_screen.dart'; // ใช้ AbstractBackground + shared atoms
 
@@ -20,6 +21,7 @@ class _SignInScreenState extends State<SignInScreen> {
   bool _obscure = true;
   // bool _remember = true;
   // bool _loading = false; // เผื่อไว้ถ้าจะกันกดซ้ำ
+
 
   Future<void> signInWithGoogle() async {
     try {
@@ -70,6 +72,47 @@ class _SignInScreenState extends State<SignInScreen> {
       }
     } on FirebaseAuthException catch (e) {
       String msg = 'ไม่สามารถเข้าสู่ระบบด้วย Google ได้';
+      // เคสพบบ่อย ๆ
+      if (e.code == 'account-exists-with-different-credential') {
+        msg = 'อีเมลนี้ผูกกับวิธีเข้าสู่ระบบอื่นอยู่ (เช่น Email/Password)';
+      } else if (e.code == 'popup-closed-by-user') {
+        msg = 'ปิดหน้าต่างก่อนดำเนินการเสร็จ';
+      } else if (e.code == 'web-context-cancelled') {
+        msg = 'การยืนยันตนถูกยกเลิก';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('เกิดข้อผิดพลาด')));
+    }
+  }
+
+  Future<void> signInWithGithub() async {
+    try {
+      if (kIsWeb) {
+        // --- Web ใช้ Popup ---
+        final githubProvider = GithubAuthProvider();
+        // หากต้องการขอ scope เพิ่มเติม ให้เพิ่มแบบนี้:
+        // githubProvider.addScope('repo');
+        final userCredential = await FirebaseAuth.instance.signInWithPopup(
+          githubProvider,
+        );
+
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const Home2Screen()),
+          );
+        }
+        return;
+      }
+
+      // --- Android/iOS ยังไม่รองรับ GitHub Sign-In ---
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('GitHub Sign-In รองรับเฉพาะบนเว็บเท่านั้น')),
+      );
+    } on FirebaseAuthException catch (e) {
+      String msg = 'ไม่สามารถเข้าสู่ระบบด้วย GitHub ได้';
       // เคสพบบ่อย ๆ
       if (e.code == 'account-exists-with-different-credential') {
         msg = 'อีเมลนี้ผูกกับวิธีเข้าสู่ระบบอื่นอยู่ (เช่น Email/Password)';
@@ -252,7 +295,7 @@ class _SignInScreenState extends State<SignInScreen> {
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w600,
-                                        color: Colors.black,
+                                        color: Colors.white,
                                       ),
                                     ),
                                   ),
@@ -262,14 +305,31 @@ class _SignInScreenState extends State<SignInScreen> {
                                 const SizedBox(height: 12),
                                 SizedBox(
                                   height: 48,
-                                  child: OutlinedButton.icon(
-                                    icon: Image.network(
-                                      'https://cdn1.iconfinder.com/data/icons/google-s-logo/150/Google_Icons-09-1024.png',
-                                      width: 20,
-                                      // height: 20,
-                                    ), // ใส่ไอคอนของคุณ
-                                    label: const Text('Continue with Google'),
+                                  child: OutlinedButton(
                                     onPressed: signInWithGoogle,
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.g_mobiledata, size: 30, fill: 1, textDirection: TextDirection.rtl), // ใส่ไอคอนของคุณ
+                                        const Text('Continue with Google'),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(height: 10),
+                                SizedBox(
+                                  height: 48,
+                                  child: OutlinedButton(
+                                    onPressed: signInWithGithub,
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(SimpleIcons.github, size: 20, textDirection: TextDirection.ltr), // ใส่ไอคอนของคุณ
+                                        const Text('  Continue with Github'),
+                                      ],
+                                    ),
                                   ),
                                 ),
                                 SizedBox(height: 10),
