@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -44,6 +46,12 @@ class _TopupScreenState extends State<TopupScreen> {
     return double.tryParse(priceText.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0.0;
   }
 
+  bool isUploadingSlip = false;
+  double uploadProgress = 0.0; // 0.0 - 1.0
+  bool uploadSuccess = false;
+  String? slipFileName;
+  Uint8List?
+  slipBytes; // เผื่ออยากเก็บตัวไฟล์ไว้ใช้งานต่อ (เช่น ส่งขึ้น backend)
   User? user = FirebaseAuth.instance.currentUser;
 
   // เลือกแพ็กเกจ
@@ -61,50 +69,142 @@ class _TopupScreenState extends State<TopupScreen> {
   // ถ้าต้องการรู้ current step จาก controller ให้ลองฟัง listener
   int currentStep = 0;
 
+  Future<void> _pickAndUploadSlip({
+    void Function(void Function())? setStateDialog,
+  }) async {
+    // ✅ ฟังก์ชันช่วยอัปเดตทั้ง Dialog และ State หลักพร้อมกัน
+    void refresh(VoidCallback fn) {
+      if (mounted) setState(fn);
+      if (setStateDialog != null) setStateDialog(fn);
+    }
+
+    refresh(() {
+      uploadSuccess = false;
+      isUploadingSlip = true;
+      uploadProgress = 0.0;
+    });
+
+    try {
+      if (kIsWeb) {
+        final input = html.FileUploadInputElement()
+          ..accept = 'image/*'
+          ..multiple = false
+          ..click();
+
+        await input.onChange.first;
+        if (input.files == null || input.files!.isEmpty) {
+          refresh(() => isUploadingSlip = false);
+          return;
+        }
+
+        final file = input.files!.first;
+        final reader = html.FileReader();
+        final completer = Completer<void>();
+        reader.onLoadEnd.listen((_) => completer.complete());
+        reader.readAsArrayBuffer(file);
+        await completer.future;
+
+        // ✅ รองรับได้ทั้ง ByteBuffer และ NativeUint8List
+        final result = reader.result;
+        late Uint8List data;
+        if (result is ByteBuffer) {
+          data = result.asUint8List();
+        } else if (result is Uint8List) {
+          data = result;
+        } else if (result is String) {
+          // เผื่อกรณี base64 string
+          final comma = result.indexOf(',');
+          final b64 = comma != -1 ? result.substring(comma + 1) : result;
+          data = base64Decode(b64);
+        } else {
+          throw StateError(
+            'Unsupported FileReader.result type: ${result.runtimeType}',
+          );
+        }
+
+        refresh(() {
+          slipFileName = file.name;
+          slipBytes = data;
+        });
+
+        // จำลอง progress
+        for (int i = 1; i <= 20; i++) {
+          await Future.delayed(const Duration(milliseconds: 80));
+          refresh(() => uploadProgress = i / 20);
+        }
+
+        refresh(() {
+          isUploadingSlip = false;
+          uploadSuccess = true;
+        });
+
+        _showSnack('✅ อัปโหลดสลิปสำเร็จ');
+      } else {
+        _showSnack(
+          'โปรดติดตั้ง file_picker หรือ image_picker เพื่อเลือกสลิปบนมือถือ',
+        );
+        refresh(() => isUploadingSlip = false);
+      }
+    } catch (e) {
+      refresh(() {
+        isUploadingSlip = false;
+        uploadSuccess = false;
+      });
+      _showSnack('อัปโหลดไม่สำเร็จ: $e');
+    }
+  }
+
   Future<void> _saveQrToGallery() async {
-  try {
-    // 🔹 1. แปลง Widget เป็น PNG bytes
-    final boundary = _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-    final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    final bytes = byteData!.buffer.asUint8List();
-
-    final filename = 'promptpay_${DateTime.now().millisecondsSinceEpoch}.png';
-
-    // 🔹 2. แยกตาม Platform
-    if (kIsWeb) {
-      // ======= 🌐 WEB =======
-      final blob = html.Blob([bytes], 'image/png');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-
-      _showSnack('✅ ดาวน์โหลด QR เรียบร้อย');
-    } else {
-      // ======= 📱 MOBILE =======
-      // ขอ permission สำหรับ Android (ไม่บังคับใน iOS)
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        _showSnack('ไม่ได้รับสิทธิ์บันทึกไฟล์');
+    try {
+      final ctx = _qrKey.currentContext;
+      if (ctx == null) {
+        _showSnack('ยังเตรียมภาพไม่เสร็จ ลองใหม่อีกครั้ง');
         return;
       }
+      // 🔹 1. แปลง Widget เป็น PNG bytes
+      final boundary =
+          _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final bytes = byteData!.buffer.asUint8List();
 
-      final result = await ImageGallerySaver.saveImage(
-        bytes,
-        name: filename,
-        quality: 100,
-      );
+      final filename = 'promptpay_${DateTime.now().millisecondsSinceEpoch}.png';
 
-      final ok = (result is Map) && (result['isSuccess'] == true || result['filePath'] != null);
-      _showSnack(ok ? '✅ บันทึก QR ลงแกลเลอรีแล้ว' : '❌ บันทึกไม่สำเร็จ');
+      // 🔹 2. แยกตาม Platform
+      if (kIsWeb) {
+        // ======= 🌐 WEB =======
+        final blob = html.Blob([bytes], 'image/png');
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
+          ..setAttribute('download', filename)
+          ..click();
+        html.Url.revokeObjectUrl(url);
+
+        _showSnack('✅ ดาวน์โหลด QR เรียบร้อย');
+      } else {
+        // ======= 📱 MOBILE =======
+        // ขอ permission สำหรับ Android (ไม่บังคับใน iOS)
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
+          _showSnack('ไม่ได้รับสิทธิ์บันทึกไฟล์');
+          return;
+        }
+
+        final result = await ImageGallerySaver.saveImage(
+          bytes,
+          name: filename,
+          quality: 100,
+        );
+
+        final ok =
+            (result is Map) &&
+            (result['isSuccess'] == true || result['filePath'] != null);
+        _showSnack(ok ? '✅ บันทึก QR ลงแกลเลอรีแล้ว' : '❌ บันทึกไม่สำเร็จ');
+      }
+    } catch (e) {
+      _showSnack('เกิดข้อผิดพลาด: $e');
     }
-  } catch (e) {
-    _showSnack('เกิดข้อผิดพลาด: $e');
   }
-}
-
 
   final List<SubscriptionOption> options = [
     SubscriptionOption("2 วัน", "฿99", 0),
@@ -308,130 +408,211 @@ class _TopupScreenState extends State<TopupScreen> {
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        actionsAlignment: MainAxisAlignment.center, // จัดกึ่งกลาง
-        actionsOverflowButtonSpacing: 12, // ระยะห่างเมื่อพับบรรทัด
-        actionsOverflowDirection:
-            VerticalDirection.down, // ถ้าล้น ให้ขึ้นบรรทัดใหม่ลงล่าง
-        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      builder: (_) => StatefulBuilder(
+        builder: (dialogCtx, setStateDialog) {
+          return AlertDialog(
+            actionsAlignment: MainAxisAlignment.center, // จัดกึ่งกลาง
+            actionsOverflowButtonSpacing: 12, // ระยะห่างเมื่อพับบรรทัด
+            actionsOverflowDirection:
+                VerticalDirection.down, // ถ้าล้น ให้ขึ้นบรรทัดใหม่ลงล่าง
+            actionsPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 8,
+            ),
 
-        backgroundColor: Colors.grey[900],
-        title: const Text(
-          "สแกนชำระด้วย PromptPay",
-          style: TextStyle(color: Colors.white),
-        ),
-        content: SingleChildScrollView(
-          child: SizedBox(
-            width: 350,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                RepaintBoundary(
-                  key: _qrKey,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white, // 🔹 สีพื้นหลัง
-                      borderRadius: BorderRadius.circular(12), // 🔹 มุมโค้ง
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black12,
-                          blurRadius: 6,
-                          offset: Offset(0, 3),
+            backgroundColor: Colors.grey[900],
+            title: const Text(
+              "สแกนชำระด้วย PromptPay",
+              style: TextStyle(color: Colors.white),
+            ),
+            content: SingleChildScrollView(
+              child: SizedBox(
+                width: 350,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    RepaintBoundary(
+                      key: _qrKey,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white, // 🔹 สีพื้นหลัง
+                          borderRadius: BorderRadius.circular(12), // 🔹 มุมโค้ง
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 6,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
                         ),
-                      ],
+                        padding: const EdgeInsets.all(16),
+                        child: ThaiQRWidget(
+                          showHeader: false,
+                          mobileOrId: "0876947022",
+                          amount: _parsePrice(opt.price).toString(),
+                        ),
+                      ),
                     ),
-                    padding: const EdgeInsets.all(16),
-                    child: ThaiQRWidget(
-                      showHeader: false,
-                      mobileOrId: "0876947022",
-                      amount: _parsePrice(opt.price).toString(),
+
+                    SizedBox(height: 8),
+                    Text(
+                      "ยอดชำระ: ${opt.price}",
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
                     ),
-                  ),
+                    // แสดงชื่อไฟล์ (ถ้ามี)
+                    if (slipFileName != null && slipFileName!.isNotEmpty)
+                      Text(
+                        "ไฟล์: $slipFileName",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                        ),
+                      ),
+
+                    const SizedBox(height: 8),
+
+                    // Progress bar ระหว่างอัปโหลด
+                    if (isUploadingSlip) ...[
+                      LinearProgressIndicator(
+                        value: uploadProgress == 0.0 ? null : uploadProgress,
+                        backgroundColor: Colors.white10,
+                        minHeight: 6,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        uploadProgress == 0.0
+                            ? "กำลังอัปโหลด..."
+                            : "กำลังอัปโหลด ${(uploadProgress * 100).toStringAsFixed(0)}%",
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+
+                    // Alert-success เมื่ออัปโหลดเสร็จ
+                    if (uploadSuccess) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: Color(0xFF1B5E20), // เขียวเข้ม
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.greenAccent.shade400,
+                            width: 1,
+                          ),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.check_circle, color: Colors.white),
+                            SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                "อัปโหลดสลิปสำเร็จ",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+            actions: [
+              // 🔹 บรรทัดแรก: ปุ่มสลิปกับ QR
+              if (selectedPayment == 0 || selectedPayment == 2)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: myColor,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      onPressed: () =>
+                          _pickAndUploadSlip(setStateDialog: setStateDialog),
+                      icon: const Icon(Icons.upload, color: Colors.white),
+                      label: const Text(
+                        "อัปโหลดสลิป",
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                    SizedBox(width: 16),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.lightBlue[800],
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      icon: const Icon(Icons.save, color: Colors.white),
+                      onPressed: _saveQrToGallery,
+                      label: const Text(
+                        "QR code",
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ],
                 ),
 
-                SizedBox(height: 8),
-                Text(
-                  "ยอดชำระ: ${opt.price}",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          // 🔹 บรรทัดแรก: ปุ่มสลิปกับ QR
-          if (selectedPayment == 0 || selectedPayment == 2)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: myColor,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+              // 🔹 บรรทัดที่สอง: ปุ่ม “ปิด” กับ “ยืนยัน” อยู่ใน Row เดียวกัน
+              Padding(
+                padding: const EdgeInsets.only(top: 12.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text(
+                        "ปิด",
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
-                  ),
-                  onPressed: () {},
-                  icon: const Icon(Icons.upload, color: Colors.white),
-                  label: const Text(
-                    "อัปโหลดสลิป",
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-                SizedBox(width: 16),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.lightBlue[800],
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const Home2Screen(),
+                          ),
+                        );
+                      },
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
+                        ),
+                      ),
+                      child: const Text(
+                        "ยืนยัน",
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
-                  ),
-                  icon: const Icon(Icons.save, color: Colors.white),
-                  onPressed: _saveQrToGallery,
-                  label: const Text(
-                    "QR code",
-                    style: TextStyle(color: Colors.white),
-                  ),
+                  ],
                 ),
-              ],
-            ),
-
-          // 🔹 บรรทัดที่สอง: ปุ่ม “ปิด” กับ “ยืนยัน” อยู่ใน Row เดียวกัน
-          Padding(
-            padding: const EdgeInsets.only(top: 12.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text(
-                    "ปิด",
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Home2Screen()));
-                  },
-                  style: TextButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
-                  ),
-                  child: const Text(
-                    "ยืนยัน",
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -649,40 +830,6 @@ class _TopupScreenState extends State<TopupScreen> {
                       ),
                       subtitle: const Text(
                         "สแกน QR พร้อมเพย์",
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ),
-                  ),
-                  Card(
-                    color: Colors.black,
-                    child: RadioListTile<int>(
-                      activeColor: myColor,
-                      value: 1,
-                      groupValue: selectedPayment,
-                      onChanged: (v) => setState(() => selectedPayment = v!),
-                      title: const Text(
-                        "บัตรเครดิต/เดบิต",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      subtitle: const Text(
-                        "Visa / MasterCard",
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ),
-                  ),
-                  Card(
-                    color: Colors.black,
-                    child: RadioListTile<int>(
-                      activeColor: myColor,
-                      value: 2,
-                      groupValue: selectedPayment,
-                      onChanged: (v) => setState(() => selectedPayment = v!),
-                      title: const Text(
-                        "โอนเงินผ่านธนาคาร",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      subtitle: const Text(
-                        "อัปโหลดสลิปหลังโอน",
                         style: TextStyle(color: Colors.white70),
                       ),
                     ),
