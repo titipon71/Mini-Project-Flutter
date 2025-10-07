@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:my_app/screens/add_chapter_screen.dart';
 import 'package:my_app/screens/add_manga_screen.dart';
+import 'package:my_app/screens/admin_topup_screen.dart';
 import 'package:my_app/screens/edit_chapter_screen.dart';
 import 'package:my_app/screens/edit_manga_screen.dart';
 import 'package:my_app/screens/edit_websiteinfo_screen.dart';
+import 'package:my_app/screens/make_role_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -31,92 +33,91 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   Future<void> fetchMangas() async {
-  try {
-    final snapshot = await _rootRef.child('mangas').get();
+    try {
+      final snapshot = await _rootRef.child('mangas').get();
 
-    if (!snapshot.exists) {
+      if (!snapshot.exists) {
+        setState(() {
+          mangas = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      final raw = snapshot.value;
+      final List<Map<String, dynamic>> mangaList = [];
+
+      if (raw is List) {
+        for (final e in raw) {
+          if (e is Map) mangaList.add(Map<String, dynamic>.from(e));
+        }
+      } else if (raw is Map) {
+        raw.forEach((k, v) {
+          if (v is Map) mangaList.add(Map<String, dynamic>.from(v));
+        });
+      } // อื่น ๆ ข้าม
+
+      setState(() {
+        mangas = mangaList;
+        isLoading = false;
+
+        // รีเซ็ตตัวเลือกตอนต่อการ์ด ถ้ายังไม่เคยตั้งค่า ให้เลือกตอนแรกที่มีได้
+        for (var i = 0; i < mangas.length; i++) {
+          final chapters = _extractChapters(mangas[i]);
+          if (chapters.isNotEmpty && (selectedChapterByManga[i] == null)) {
+            selectedChapterByManga[i] =
+                chapters.first['chapterIndex']; // int หรือ String ก็ได้
+          }
+        }
+      });
+    } catch (e) {
       setState(() {
         mangas = [];
         isLoading = false;
       });
-      return;
     }
-
-    final raw = snapshot.value;
-    final List<Map<String, dynamic>> mangaList = [];
-
-    if (raw is List) {
-      for (final e in raw) {
-        if (e is Map) mangaList.add(Map<String, dynamic>.from(e));
-      }
-    } else if (raw is Map) {
-      raw.forEach((k, v) {
-        if (v is Map) mangaList.add(Map<String, dynamic>.from(v));
-      });
-    } // อื่น ๆ ข้าม
-
-    setState(() {
-      mangas = mangaList;
-      isLoading = false;
-
-      // รีเซ็ตตัวเลือกตอนต่อการ์ด ถ้ายังไม่เคยตั้งค่า ให้เลือกตอนแรกที่มีได้
-      for (var i = 0; i < mangas.length; i++) {
-        final chapters = _extractChapters(mangas[i]);
-        if (chapters.isNotEmpty && (selectedChapterByManga[i] == null)) {
-          selectedChapterByManga[i] = chapters.first['chapterIndex']; // int หรือ String ก็ได้
-        }
-      }
-    });
-  } catch (e) {
-    setState(() {
-      mangas = [];
-      isLoading = false;
-    });
   }
-}
-
 
   /// แปลง chapters ที่เป็น List (มี null ตัวแรก) -> List<Map> ที่สะอาด
   /// และพ่วงค่า chapterIndex (index จริงใน Firebase)
   /// คืนค่าเป็น List<Map> ที่ “สะอาด”
-/// เพิ่ม field 'chapterIndex' ไว้ชี้ไปยัง index (ถ้า chapters เป็น List)
-/// หรือ key จริง (ถ้า chapters เป็น Map/push keys)
-List<Map<String, dynamic>> _extractChapters(Map<String, dynamic> manga) {
-  final raw = manga['chapters'];
-  final List<Map<String, dynamic>> result = [];
+  /// เพิ่ม field 'chapterIndex' ไว้ชี้ไปยัง index (ถ้า chapters เป็น List)
+  /// หรือ key จริง (ถ้า chapters เป็น Map/push keys)
+  List<Map<String, dynamic>> _extractChapters(Map<String, dynamic> manga) {
+    final raw = manga['chapters'];
+    final List<Map<String, dynamic>> result = [];
 
-  if (raw is List) {
-    for (int i = 0; i < raw.length; i++) {
-      final item = raw[i];
-      if (item is Map) {
-        final map = Map<String, dynamic>.from(item);
-        map['chapterIndex'] = i; // index จริงใน Firebase กรณีเป็นลิสต์
-        result.add(map);
+    if (raw is List) {
+      for (int i = 0; i < raw.length; i++) {
+        final item = raw[i];
+        if (item is Map) {
+          final map = Map<String, dynamic>.from(item);
+          map['chapterIndex'] = i; // index จริงใน Firebase กรณีเป็นลิสต์
+          result.add(map);
+        }
       }
+    } else if (raw is Map) {
+      raw.forEach((key, value) {
+        if (value is Map) {
+          final map = Map<String, dynamic>.from(value);
+          map['chapterIndex'] = key; // เก็บ push key ไว้ใช้ตอนอ่าน/อัปเดต
+          result.add(map);
+        }
+      });
+    } else {
+      return [];
     }
-  } else if (raw is Map) {
-    raw.forEach((key, value) {
-      if (value is Map) {
-        final map = Map<String, dynamic>.from(value);
-        map['chapterIndex'] = key; // เก็บ push key ไว้ใช้ตอนอ่าน/อัปเดต
-        result.add(map);
-      }
-    });
-  } else {
-    return [];
+
+    // เรียงตาม number (ถ้ามี) โดยพยายามแปลงเป็น int ให้ได้
+    int _asInt(dynamic v) {
+      if (v is int) return v;
+      if (v is String) return int.tryParse(v) ?? 0;
+      return 0;
+    }
+
+    result.sort((a, b) => _asInt(a['number']).compareTo(_asInt(b['number'])));
+    return result;
   }
-
-  // เรียงตาม number (ถ้ามี) โดยพยายามแปลงเป็น int ให้ได้
-  int _asInt(dynamic v) {
-    if (v is int) return v;
-    if (v is String) return int.tryParse(v) ?? 0;
-    return 0;
-  }
-
-  result.sort((a, b) => _asInt(a['number']).compareTo(_asInt(b['number'])));
-  return result;
-}
-
 
   @override
   Widget build(BuildContext context) {
@@ -171,6 +172,48 @@ List<Map<String, dynamic>> _extractChapters(Map<String, dynamic> manga) {
                     foregroundColor: Colors.white,
                   ),
                 ),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            spacing: 10.0,
+            children: [
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const MakeRoleScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.card_membership),
+                label: const Text('Role Management'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.amber,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10.0),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const AdminTopupScreen(),
+                    ),
+                  );
+                },
+                label: const Text('Status Management'),
+                icon: const Icon(Icons.dashboard_customize),
               ),
             ],
           ),

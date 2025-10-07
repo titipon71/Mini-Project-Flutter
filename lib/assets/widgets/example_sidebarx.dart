@@ -1,14 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:my_app/assets/widgets/vip_status_widget.dart';
 import 'package:my_app/screens/admin_dashboard_screen.dart';
 import 'package:my_app/screens/home2_screen.dart';
 import 'package:my_app/screens/sign_in_screen.dart';
 import 'package:my_app/screens/sign_up_screen.dart';
 import 'package:my_app/screens/topup_screen.dart';
+import 'package:my_app/services/vip_service.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:my_app/helpers/user_role_extension.dart'; // .isAdmin(), .isVIP()
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 
 class ExampleSidebarX extends StatefulWidget {
   const ExampleSidebarX({super.key, required this.controller});
@@ -20,10 +26,34 @@ class ExampleSidebarX extends StatefulWidget {
 
 class _ExampleSidebarXState extends State<ExampleSidebarX> {
   final Stream<User?> _auth$ = FirebaseAuth.instance.authStateChanges();
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _vipSub;
 
+  bool _isVIP = false;
+  bool _vip = false;
   bool _isAdmin = false;
   bool _loadingRole = true;
   String? _lastUid; // ใช้ตรวจว่า user เปลี่ยนหรือยัง
+ Future<void> checkVip() async {
+  final uid = FirebaseAuth.instance.currentUser!.uid;
+  final vip = await isVip(uid);
+  print('VIP status: $vip');
+  setState(() {
+    _vip = vip;
+  });
+}
+void _listenVip(String uid) {
+  _vipSub?.cancel();
+  _vipSub = FirebaseFirestore.instance
+      .collection('users')
+      .doc(uid)
+      .snapshots()
+      .listen((snap) {
+    final v = (snap.data()?['roles']?['vip'] ?? false) as bool;
+    if (mounted) setState(() => _vip = v);
+  }, onError: (_) {
+    if (mounted) setState(() => _vip = false);
+  });
+}
 
   @override
   void initState() {
@@ -31,17 +61,25 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
     _loadUserRole(); // เผื่อกรณีมี user อยู่แล้ว
   }
 
+  @override
+void dispose() {
+  _vipSub?.cancel();
+  super.dispose();
+}
+
   Future<void> _loadUserRole() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       setState(() {
         _isAdmin = false;
+        _isVIP = false;
         _loadingRole = false;
         _lastUid = null;
       });
       return;
     }
-    final isAdmin = await user.isAdmin(); // (รีเฟรช token ภายใน)
+
+    final isAdmin = await user.isAdmin(refresh: true); // (รีเฟรช token ภายใน)
     if (!mounted) return;
     setState(() {
       _isAdmin = isAdmin;
@@ -68,12 +106,16 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
         final user = snapshot.data;
         final isSignedIn = user != null;
 
+        
         // ถ้า user เปลี่ยน (login/logout/switch) ให้โหลด role ใหม่ 1 ครั้ง
         if (user?.uid != _lastUid) {
-          _loadingRole = true; // ป้องกันกระพริบ
-          // รันแบบ async เล็กน้อยเพื่อไม่บล็อค build
-          WidgetsBinding.instance.addPostFrameCallback((_) => _loadUserRole());
-        }
+  _loadingRole = true;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _vipSub?.cancel();                           // ปลดของเก่า
+    if (user != null) _listenVip(user.uid);      // 👈 ผูกตัวใหม่
+    _loadUserRole();                              // โหลดสถานะแอดมินเหมือนเดิม
+  });
+}
 
         // ชื่อที่จะแสดง
         final String displayName = () {
@@ -87,16 +129,28 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
               );
           if (fromProvider != null) return fromProvider;
           return user?.email ?? 'User';
+          
         }();
 
         // สร้างรายการเมนูตามสถานะ
         final List<SidebarXItem> items = [
+          
+
           if (isSignedIn)
+            
             SidebarXItem(
+              
               icon: Icons.account_circle,
               label: displayName,
               onTap: () {},
             ),
+          if (isSignedIn && _vip)
+            SidebarXItem(
+              icon: Icons.workspace_premium,
+              label: '🌟 VIP User',
+              onTap: () {},
+            ),
+
           if (isSignedIn)
             SidebarXItem(
               icon: Icons.home,

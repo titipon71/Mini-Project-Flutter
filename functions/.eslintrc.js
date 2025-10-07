@@ -4,16 +4,18 @@ module.exports = {
     node: true,
   },
   parserOptions: {
-    "ecmaVersion": 2018,
+    "ecmaVersion": 2020,
   },
   extends: [
     "eslint:recommended",
     "google",
   ],
   rules: {
-    "no-restricted-globals": ["error", "name", "length"],
-    "prefer-arrow-callback": "error",
-    "quotes": ["error", "double", {"allowTemplateLiterals": true}],
+    "linebreak-style": "off",         // ไม่เช็ค CRLF/LF
+    "max-len": ["warn", { "code": 120 }],
+    "quotes": ["warn", "double", { "allowTemplateLiterals": true }],
+    "object-curly-spacing": "off",
+    "no-multi-spaces": "off",
   },
   overrides: [
     {

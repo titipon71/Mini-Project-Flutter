@@ -1,9 +1,12 @@
 import 'dart:async';
-
+import 'package:my_app/assets/widgets/vip_status_widget.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:http/http.dart' as http;
 import 'package:my_app/assets/widgets/example_sidebarx.dart';
 import 'package:my_app/screens/home2_screen.dart';
 import 'package:my_app/screens/navbar2_screen.dart';
@@ -27,6 +30,9 @@ class SubscriptionOption {
   SubscriptionOption(this.label, this.price, this.value, {this.tag});
 }
 
+const String _SLIPOK_URL = 'https://slipokproxy-q3rjxjrnoq-as.a.run.app';
+
+
 class TopupScreen extends StatefulWidget {
   const TopupScreen({super.key});
 
@@ -35,16 +41,27 @@ class TopupScreen extends StatefulWidget {
 }
 
 class _TopupScreenState extends State<TopupScreen> {
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _topupSub;
   final GlobalKey _qrKey = GlobalKey();
   final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final stepProgressController = StepProgressController(
     totalSteps: 3,
     initialStep: 0,
   );
+  bool isSavingTopup = false;
   final myColor = const Color(0xFFF6B606); // แก้ไขการประกาศตัวแปร
   double _parsePrice(String priceText) {
     return double.tryParse(priceText.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0.0;
   }
+
+  Stream<bool> _vipStream(String uid) {
+  return FirebaseFirestore.instance
+      .collection('users')
+      .doc(uid)
+      .snapshots()
+      .map((s) => (s.data()?['roles']?['vip'] ?? false) as bool);
+}
+
 
   bool isUploadingSlip = false;
   double uploadProgress = 0.0; // 0.0 - 1.0
@@ -68,6 +85,264 @@ class _TopupScreenState extends State<TopupScreen> {
 
   // ถ้าต้องการรู้ current step จาก controller ให้ลองฟัง listener
   int currentStep = 0;
+
+  Future<void> _approveTopupAndMarkVip({
+    required String topupId,
+    required String uid,
+    required int days,
+    Map<String, dynamic>? slipokPayload,
+  }) async {
+    final fs = FirebaseFirestore.instance;
+    final now = DateTime.now();
+    final vipUntil = now.add(Duration(days: days));
+
+    final batch = fs.batch();
+
+    // อัปเดต topup กลาง
+    final topupRef = fs.collection('topups').doc(topupId);
+    batch.update(topupRef, {
+      'status': 'approved',
+      'paidAt': Timestamp.fromDate(now),
+      if (slipokPayload != null) 'slipokPayload': slipokPayload,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    // ซ้ำใต้ user
+    final underUser = fs
+        .collection('users')
+        .doc(uid)
+        .collection('topups')
+        .doc(topupId);
+    batch.set(underUser, {
+      'status': 'approved',
+      'paidAt': Timestamp.fromDate(now),
+      if (slipokPayload != null) 'slipokPayload': slipokPayload,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // ตีตรา VIP ใน users/{uid}
+    final userRef = fs.collection('users').doc(uid);
+    batch.set(userRef, {
+      'roles': {'vip': true, 'vipUntil': Timestamp.fromDate(vipUntil)},
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+
+    // ให้ token รีเฟรชเผื่อคุณมี logic อื่นอาศัย token
+    await FirebaseAuth.instance.currentUser?.getIdToken(true);
+  }
+
+  Future<bool> _verifyWithSlipOK({
+    required String topupId,
+    required double amountExpected,
+    required String uid,
+    required int packageDays,
+    String? slipUrl,
+  }) async {
+    try {
+      final body = {
+        if (slipUrl != null) 'url': slipUrl,
+        'amount': amountExpected,
+        'refCode': topupId,
+      };
+
+      final res = await http
+    .post(
+      Uri.parse(_SLIPOK_URL),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(body),
+    )
+    .timeout(const Duration(seconds: 20));
+
+      if (res.statusCode != 200) {
+  final err = res.body.isNotEmpty ? res.body : 'no body';
+  _showSnack('SlipOK error: HTTP ${res.statusCode} • $err');
+  debugPrint('[SlipOK] ${res.statusCode} ${res.body}');
+  return false;
+}
+
+      final jsonMap = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = (jsonMap['data'] ?? {}) as Map<String, dynamic>;
+      final bool success = data['success'] == true;
+
+      final num? amountFromSlip = (data['amount'] is num)
+          ? data['amount'] as num
+          : null;
+      bool amountOk = true;
+      if (amountFromSlip != null) {
+        amountOk =
+            (amountFromSlip.toDouble() - amountExpected).abs() <
+            0.5; // เผื่อ 0.5 บาท
+      }
+
+      if (success && amountOk) {
+        await _approveTopupAndMarkVip(
+          topupId: topupId,
+          uid: uid,
+          days: packageDays,
+          slipokPayload: jsonMap,
+        );
+        _showSnack('✅ ตรวจสลิปผ่าน • อัปเดต VIP แล้ว');
+        return true; // ← บอกว่าผ่าน
+      } else {
+        await FirebaseFirestore.instance
+            .collection('topups')
+            .doc(topupId)
+            .update({
+              // 'status': 'failed',
+              'failReason': success ? 'amount_mismatch' : 'slip_verify_failed',
+              'slipokPayload': jsonMap,
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+        _showSnack('❌ ตรวจสลิปไม่ผ่าน');
+        return false;
+      }
+    } catch (e) {
+      _showSnack('เกิดข้อผิดพลาด: $e');
+      print(e);
+      return false;
+    }
+  }
+
+  Future<String?> _uploadSlipToStorage(String topupId) async {
+    // ถ้าไม่มีสลิป ก็ไม่ต้องอัปโหลด
+    if (slipBytes == null || slipBytes!.isEmpty) return null;
+
+    final uid = user?.uid ?? 'anonymous';
+    final fileName =
+        slipFileName ?? 'slip_${DateTime.now().millisecondsSinceEpoch}.png';
+    final path = 'topup_slips/$uid/$topupId/$fileName';
+
+    final ref = FirebaseStorage.instance.ref().child(path);
+    final meta = SettableMetadata(contentType: 'image/png');
+
+    await ref.putData(slipBytes!, meta);
+    final url = await ref.getDownloadURL();
+    return url;
+  }
+
+  Future<void> _requestManualVerify({
+    required String topupId,
+    required String refCode,
+    required String slipUrl,
+  }) async {
+    final uri = Uri.parse('https://manualverify-q3rjxjrnoq-as.a.run.app/m');
+    final res = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'topupId': topupId,
+        'refCode': refCode,
+        'slipUrl': slipUrl,
+      }),
+    );
+    if (res.statusCode != 200) {
+      _showSnack('ตรวจสลิปไม่สำเร็จ (${res.statusCode})');
+    }
+  }
+
+  Future<String> _saveTopupToFirestore({
+    required String topupId, // <-- เพิ่ม
+    required String userId,
+    required String? userName,
+    required SubscriptionOption option,
+    required String paymentMethod,
+    required String refCode, // <-- เพิ่ม
+    String? referralCode,
+    String? slipUrl,
+  }) async {
+    final fs = FirebaseFirestore.instance;
+    final amount = _parsePrice(option.price);
+    final now = FieldValue.serverTimestamp();
+
+    final data = {
+      'topupId': topupId,
+      'userId': userId,
+      'userName': userName ?? userId,
+      'packageLabel': option.label,
+      'packageValue': option.value,
+      'priceText': option.price,
+      'amount': amount,
+      'amountExpected': amount, // ค่า canonical ที่ webhook/manual จะเทียบ
+      'paymentMethod': paymentMethod,
+      'status': 'pending',
+      'refCode': refCode, // <-- สำคัญ
+      'referral': (referralCode?.isNotEmpty ?? false) ? referralCode : null,
+      'slip': slipUrl != null
+          ? {'fileName': slipFileName, 'downloadUrl': slipUrl}
+          : null,
+      'platform': kIsWeb ? 'web' : 'mobile',
+      'createdAt': now,
+      'updatedAt': now,
+      'qrAmount': amount,
+      'qrTarget': '0876947022',
+      // สำหรับเปลี่ยนสิทธิ์อัตโนมัติ
+      'roleTarget': 'vip',
+      'durationDays': _mapPackageToDays(
+        option.value,
+      ), // สร้างฟังก์ชันแปลงแพ็กเกจ -> วัน
+      // กันสลิปเก่า
+      'expiresAt': Timestamp.fromDate(
+        DateTime.now().add(const Duration(hours: 48)),
+      ),
+    };
+
+    final batch = fs.batch();
+    final central = fs.collection('topups').doc(topupId);
+    final underUser = fs
+        .collection('users')
+        .doc(userId)
+        .collection('topups')
+        .doc(topupId);
+    batch.set(central, data);
+    batch.set(underUser, data);
+    await batch.commit();
+    return topupId;
+  }
+
+  // helper ง่าย ๆ
+  int _mapPackageToDays(int value) {
+    switch (value) {
+      case 0:
+        return 2;
+      case 1:
+        return 7;
+      case 2:
+        return 15;
+      case 3:
+        return 30;
+      case 4:
+        return 45;
+      case 5:
+        return 60;
+      case 6:
+        return 365;
+      default:
+        return 0;
+    }
+  }
+
+  void _listenTopup(String topupId) {
+    _topupSub?.cancel(); // ยกเลิกของเดิมถ้ามี
+    _topupSub = FirebaseFirestore.instance
+        .collection('topups')
+        .doc(topupId)
+        .snapshots()
+        .listen((snap) async {
+          if (!snap.exists) return;
+          final data = snap.data()!;
+          if (data['status'] == 'approved') {
+            await FirebaseAuth.instance.currentUser?.getIdToken(true);
+            _showSnack('✅ ยืนยันการชำระแล้ว! สิทธิ์ถูกอัปเดต');
+            if (mounted) Navigator.of(context).pop(); // ปิด dialog
+            // ถ้าต้องการไปหน้า success ค่อยนำทางต่อจากที่นี่
+            // if (mounted) Navigator.pushReplacement(...);
+          }
+        });
+  }
 
   Future<void> _pickAndUploadSlip({
     void Function(void Function())? setStateDialog,
@@ -216,89 +491,6 @@ class _TopupScreenState extends State<TopupScreen> {
     SubscriptionOption("12 เดือน", "฿4399", 6),
   ];
 
-  /// =============== EMV / Thai QR helpers ===============
-  String _emv(String id, String value) {
-    final len = value.length.toString().padLeft(2, '0');
-    return '$id$len$value';
-  }
-
-  // CRC16-CCITT (0xFFFF), poly 0x1021, no XOR-out
-  int _crc16CCITT(List<int> bytes) {
-    int crc = 0xFFFF;
-    for (final b in bytes) {
-      crc ^= (b << 8) & 0xFFFF;
-      for (int i = 0; i < 8; i++) {
-        if ((crc & 0x8000) != 0) {
-          crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
-        } else {
-          crc = (crc << 1) & 0xFFFF;
-        }
-      }
-    }
-    return crc & 0xFFFF;
-  }
-
-  /// แปลงเบอร์มือถือ 0XXXXXXXXX -> 0066XXXXXXXXX (ตัด 0 นำหน้า)
-  String _promptPayMobile(String mobile) {
-    final digits = mobile.replaceAll(RegExp(r'\D'), '');
-    if (digits.startsWith('0')) {
-      return '0066${digits.substring(1)}';
-    }
-    if (digits.startsWith('66')) {
-      return '00$digits';
-    }
-    // ถ้าเป็นรูปแบบอื่น ให้ผู้ใช้จัดรูปเองตามที่ใช้งานจริง
-    return digits;
-  }
-
-  /// สร้าง Thai QR PromptPay Payload
-  /// [ppId] = หมายเลขพร้อมเพย์ (เช่น มือถือ) ที่แปลงเป็นรูปแบบตามสเปคแล้ว
-  /// [amountTHB] = จำนวนเงิน (เช่น 189.00) ถ้า null จะไม่ล็อกยอด (Static)
-  /// [merchantName], [merchantCity], [reference] = optional
-  String buildPromptPayPayload({
-    required String ppId,
-    double? amountTHB,
-    String merchantName = 'MERCHANT',
-    String merchantCity = 'BANGKOK',
-    String? reference,
-    bool dynamicQR = true,
-  }) {
-    final p00 = _emv('00', '01');
-    final p01 = _emv('01', dynamicQR ? '12' : '11');
-
-    final mai = _emv('00', 'A000000677010111') + _emv('01', ppId);
-    final p29 = _emv('29', mai);
-
-    final p52 = _emv('52', '0000');
-    final p53 = _emv('53', '764');
-    final p54 = amountTHB != null
-        ? _emv('54', amountTHB.toStringAsFixed(2))
-        : '';
-    final p58 = _emv('58', 'TH');
-
-    // ใช้ min() เพื่อได้ int แน่ ๆ
-    final safeName = merchantName.substring(0, min(merchantName.length, 25));
-    final safeCity = merchantCity.substring(0, min(merchantCity.length, 15));
-    final p59 = _emv('59', safeName);
-    final p60 = _emv('60', safeCity);
-
-    String p62 = '';
-    if (reference != null && reference.isNotEmpty) {
-      final ref = _emv('05', reference);
-      p62 = _emv('62', ref);
-    }
-
-    final noCRC =
-        p00 + p01 + p29 + p52 + p53 + p54 + p58 + p59 + p60 + p62 + '6304';
-    final bytes = ascii.encode(noCRC);
-    final crc = _crc16CCITT(
-      bytes,
-    ).toRadixString(16).toUpperCase().padLeft(4, '0');
-    final p63 = '63' + '04' + crc;
-
-    return noCRC + p63;
-  }
-
   @override
   void initState() {
     super.initState();
@@ -309,6 +501,16 @@ class _TopupScreenState extends State<TopupScreen> {
       });
     });
   }
+
+@override
+  void dispose() {
+    stepProgressController.dispose();
+    _controller.dispose();
+    // ยกเลิกสตรีมถ้ามี (ดูหมายเหตุด้านล่าง)
+    _topupSub?.cancel();
+    super.dispose();
+  }
+
 
   SubscriptionOption? get selectedOption {
     if (selectedValue < 0) return null;
@@ -376,19 +578,6 @@ class _TopupScreenState extends State<TopupScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // String _paymentLabel(int val) {
-  //   switch (val) {
-  //     case 0:
-  //       return "PromptPay";
-  //     case 1:
-  //       return "บัตรเครดิต/เดบิต";
-  //     case 2:
-  //       return "โอนเงินผ่านธนาคาร";
-  //     default:
-  //       return "-";
-  //   }
-  // }
-
   void _showPromptPayQR(BuildContext context) {
     final opt = selectedOption;
     if (opt == null) {
@@ -396,221 +585,303 @@ class _TopupScreenState extends State<TopupScreen> {
       return;
     }
 
-    final ppId = _promptPayMobile('0876947022');
-    final payload = buildPromptPayPayload(
-      ppId: ppId,
-      amountTHB: _parsePrice(opt.price),
-      merchantName: (userName ?? 'USER'),
-      merchantCity: 'BANGKOK',
-      reference: '${userId ?? ''}-${opt.value}',
-      dynamicQR: true,
-    );
-
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (dialogCtx, setStateDialog) {
-          return AlertDialog(
-            actionsAlignment: MainAxisAlignment.center, // จัดกึ่งกลาง
-            actionsOverflowButtonSpacing: 12, // ระยะห่างเมื่อพับบรรทัด
-            actionsOverflowDirection:
-                VerticalDirection.down, // ถ้าล้น ให้ขึ้นบรรทัดใหม่ลงล่าง
-            actionsPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 8,
-            ),
+          return WillPopScope(
+            onWillPop: () async => !isSavingTopup,
+            child: AlertDialog(
+              actionsAlignment: MainAxisAlignment.center, // จัดกึ่งกลาง
+              actionsOverflowButtonSpacing: 12, // ระยะห่างเมื่อพับบรรทัด
+              actionsOverflowDirection:
+                  VerticalDirection.down, // ถ้าล้น ให้ขึ้นบรรทัดใหม่ลงล่าง
+              actionsPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
 
-            backgroundColor: Colors.grey[900],
-            title: const Text(
-              "สแกนชำระด้วย PromptPay",
-              style: TextStyle(color: Colors.white),
-            ),
-            content: SingleChildScrollView(
-              child: SizedBox(
-                width: 350,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    RepaintBoundary(
-                      key: _qrKey,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white, // 🔹 สีพื้นหลัง
-                          borderRadius: BorderRadius.circular(12), // 🔹 มุมโค้ง
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 6,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        padding: const EdgeInsets.all(16),
-                        child: ThaiQRWidget(
-                          showHeader: false,
-                          mobileOrId: "0876947022",
-                          amount: _parsePrice(opt.price).toString(),
-                        ),
-                      ),
-                    ),
-
-                    SizedBox(height: 8),
-                    Text(
-                      "ยอดชำระ: ${opt.price}",
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                    // แสดงชื่อไฟล์ (ถ้ามี)
-                    if (slipFileName != null && slipFileName!.isNotEmpty)
-                      Text(
-                        "ไฟล์: $slipFileName",
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white60,
-                          fontSize: 12,
-                        ),
-                      ),
-
-                    const SizedBox(height: 8),
-
-                    // Progress bar ระหว่างอัปโหลด
-                    if (isUploadingSlip) ...[
-                      LinearProgressIndicator(
-                        value: uploadProgress == 0.0 ? null : uploadProgress,
-                        backgroundColor: Colors.white10,
-                        minHeight: 6,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        uploadProgress == 0.0
-                            ? "กำลังอัปโหลด..."
-                            : "กำลังอัปโหลด ${(uploadProgress * 100).toStringAsFixed(0)}%",
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-
-                    // Alert-success เมื่ออัปโหลดเสร็จ
-                    if (uploadSuccess) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          color: Color(0xFF1B5E20), // เขียวเข้ม
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: Colors.greenAccent.shade400,
-                            width: 1,
+              backgroundColor: Colors.grey[900],
+              title: const Text(
+                "สแกนชำระด้วย PromptPay",
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width: 350,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RepaintBoundary(
+                        key: _qrKey,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white, // 🔹 สีพื้นหลัง
+                            borderRadius: BorderRadius.circular(
+                              12,
+                            ), // 🔹 มุมโค้ง
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 6,
+                                offset: Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          padding: const EdgeInsets.all(16),
+                          child: ThaiQRWidget(
+                            showHeader: false,
+                            mobileOrId: "0876947022",
+                            amount: _parsePrice(opt.price).toString(),
                           ),
                         ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
+                      ),
+
+                      SizedBox(height: 8),
+                      Text(
+                        "ยอดชำระ: ${opt.price}",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      // แสดงชื่อไฟล์ (ถ้ามี)
+                      if (slipFileName != null && slipFileName!.isNotEmpty)
+                        Text(
+                          "ไฟล์: $slipFileName",
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white60,
+                            fontSize: 12,
+                          ),
                         ),
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.check_circle, color: Colors.white),
-                            SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                "อัปโหลดสลิปสำเร็จ",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
+
+                      const SizedBox(height: 8),
+
+                      // Progress bar ระหว่างอัปโหลด
+                      if (isUploadingSlip) ...[
+                        LinearProgressIndicator(
+                          color: Colors.greenAccent,
+                          value: uploadProgress == 0.0 ? null : uploadProgress,
+                          backgroundColor: Colors.white10,
+                          minHeight: 6,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          uploadProgress == 0.0
+                              ? "กำลังอัปโหลด..."
+                              : "กำลังอัปโหลด ${(uploadProgress * 100).toStringAsFixed(0)}%",
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+
+                      // Alert-success เมื่ออัปโหลดเสร็จ
+                      if (uploadSuccess) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: Color(0xFF1B5E20), // เขียวเข้ม
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.greenAccent.shade400,
+                              width: 1,
+                            ),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.check_circle, color: Colors.white),
+                              SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  "อัปโหลดสลิปสำเร็จ",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+              actions: [
+                if (selectedPayment == 0 || selectedPayment == 2)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: myColor,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                        ),
+                        onPressed: () =>
+                            _pickAndUploadSlip(setStateDialog: setStateDialog),
+                        icon: const Icon(Icons.upload, color: Colors.white),
+                        label: const Text(
+                          "อัปโหลดสลิป",
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.lightBlueAccent.shade700,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                        ),
+                        onPressed: _saveQrToGallery,
+                        icon: const Icon(Icons.save, color: Colors.white),
+                        label: const Text(
+                          "QR code",
+                          style: TextStyle(color: Colors.white),
                         ),
                       ),
                     ],
-                  ],
-                ),
-              ),
-            ),
+                  ),
 
-            actions: [
-              // 🔹 บรรทัดแรก: ปุ่มสลิปกับ QR
-              if (selectedPayment == 0 || selectedPayment == 2)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: myColor,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
+                // 🔹 แถวปุ่มหลัก: ยกเลิก(ซ้าย) + ยืนยัน(ขวา)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12.0),
+                  child: Row(
+                    children: [
+                      TextButton(
+                        onPressed: isSavingTopup
+                            ? null
+                            : () => Navigator.of(context).pop(),
+                        child: const Text(
+                          "ปิด",
+                          style: TextStyle(color: Colors.white),
                         ),
                       ),
-                      onPressed: () =>
-                          _pickAndUploadSlip(setStateDialog: setStateDialog),
-                      icon: const Icon(Icons.upload, color: Colors.white),
-                      label: const Text(
-                        "อัปโหลดสลิป",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                    SizedBox(width: 16),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.lightBlue[800],
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                      ),
-                      icon: const Icon(Icons.save, color: Colors.white),
-                      onPressed: _saveQrToGallery,
-                      label: const Text(
-                        "QR code",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  ],
-                ),
-
-              // 🔹 บรรทัดที่สอง: ปุ่ม “ปิด” กับ “ยืนยัน” อยู่ใน Row เดียวกัน
-              Padding(
-                padding: const EdgeInsets.only(top: 12.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text(
-                        "ปิด",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const Home2Screen(),
+                      const Spacer(),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
                           ),
-                        );
-                      },
-                      style: TextButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 12,
                         ),
+                        icon: isSavingTopup
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.check, color: Colors.white),
+                        label: const Text('ยืนยัน'),
+                        onPressed: isSavingTopup
+                            ? null
+                            : () async {
+                                final opt = selectedOption;
+                                if (opt == null) {
+                                  _showSnack('กรุณาเลือกแพ็กเกจ');
+                                  return;
+                                }
+
+                                // helper อัปเดตทั้ง dialog และหน้าหลัก
+                                void refresh(VoidCallback fn) {
+                                  if (mounted) setState(fn);
+                                  setStateDialog(fn);
+                                }
+
+                                try {
+                                  refresh(() => isSavingTopup = true);
+
+                                  // 1) เตรียม topupId
+                                  final topupId = FirebaseFirestore.instance
+                                      .collection('topups')
+                                      .doc()
+                                      .id;
+
+                                  // 2) อัปโหลดสลิป (ถ้ามี)
+                                  String? slipUrl;
+                                  if (slipBytes != null &&
+                                      slipBytes!.isNotEmpty) {
+                                    slipUrl = await _uploadSlipToStorage(
+                                      topupId,
+                                    );
+                                  } else {
+                                    _showSnack('กรุณาอัปโหลดสลิปก่อนยืนยัน');
+                                    return;
+                                  }
+
+                                  // 3) gen refCode
+                                  final uid =
+                                      FirebaseAuth.instance.currentUser?.uid;
+                                  if (uid == null) {
+                                    _showSnack('ไม่พบผู้ใช้');
+                                    return;
+                                  }
+                                  final refCode =
+                                      'TOPUP-${DateTime.now().millisecondsSinceEpoch}-$uid';
+
+                                  // 4) บันทึก Firestore (ใช้ฟังก์ชันที่คุณมี)
+                                  await _saveTopupToFirestore(
+                                    topupId: topupId,
+                                    userId: uid,
+                                    userName: userName,
+                                    option: opt,
+                                    paymentMethod: (selectedPayment == 0)
+                                        ? 'promptpay'
+                                        : (selectedPayment == 1)
+                                        ? 'card'
+                                        : 'bank_transfer',
+                                    referralCode: referral,
+                                    slipUrl: slipUrl,
+                                    refCode: refCode,
+                                  );
+
+                                  // 5) ยิง SlipOK → ถ้าผ่านจะ approved + set VIP ให้เลย (ไม่แตะ index.js)
+                                  final amount = _parsePrice(opt.price);
+                                  final days = _mapPackageToDays(opt.value);
+                                  final ok = await _verifyWithSlipOK(
+                                    topupId: topupId,
+                                    amountExpected: amount,
+                                    uid: uid,
+                                    packageDays: days,
+                                    slipUrl: slipUrl,
+                                  );
+                                  if (ok) {
+                                    Navigator.of(
+                                      dialogCtx,
+                                    ).pop(); // ← ปิดเฉพาะ Dialog
+                                  }
+
+                                  // (ออปชัน) ถ้าจะฟัง topup ก็ได้ แต่ไม่จำเป็นแล้วเพราะเราตัดสินผลเอง
+                                  // _listenTopup(topupId);
+                                } catch (e) {
+                                  _showSnack('บันทึก/ตรวจสลิปไม่สำเร็จ: $e');
+                                } finally {
+                                  refresh(() => isSavingTopup = false);
+                                }
+                              },
                       ),
-                      child: const Text(
-                        "ยืนยัน",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  ],
+                    ], // before end FilledButton.icon
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       ),
@@ -746,22 +1017,7 @@ class _TopupScreenState extends State<TopupScreen> {
                   _rowItem("ผู้ใช้งาน", userName ?? userId ?? "-"),
                   const Divider(),
                   const SizedBox(height: 4),
-                  const Text("ข้อมูลเพิ่มเติม"),
-                  const SizedBox(height: 8),
-                  TextField(
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: "โค้ดส่วนลด (ถ้ามี)",
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white24),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white54),
-                      ),
-                    ),
-                    onChanged: (v) => referral = v,
-                  ),
+
                 ],
               ),
             ),
@@ -956,6 +1212,7 @@ class _TopupScreenState extends State<TopupScreen> {
   Widget build(BuildContext context) {
     final canGoBack = currentStep > 0;
     final isLastStep = currentStep == 2;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -968,6 +1225,8 @@ class _TopupScreenState extends State<TopupScreen> {
             children: [
               _buildStepHeader(),
               const SizedBox(height: 16),
+           if (uid != null)
+              VipStatusWidget(uid: uid),
 
               // เนื้อหาตามขั้น
               Padding(
