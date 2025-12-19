@@ -276,10 +276,10 @@ class _SignInScreenState extends State<SignInScreen> {
                                     // ),
                                     // const Text('Remember me'),
                                     const Spacer(),
-                                    TextButton(
-                                      onPressed: () {},
-                                      child: const Text('Forgot password?'),
-                                    ),
+                                    // TextButton(
+                                    //   onPressed: () {},
+                                    //   child: const Text('Forgot password?'),
+                                    // ),
                                   ],
                                 ),
                                 const SizedBox(height: 6),
@@ -318,21 +318,7 @@ class _SignInScreenState extends State<SignInScreen> {
                                   ),
                                 ),
                                 SizedBox(height: 10),
-                                SizedBox(
-                                  height: 48,
-                                  child: OutlinedButton(
-                                    onPressed: signInWithGithub,
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(SimpleIcons.github, size: 20, textDirection: TextDirection.ltr), // ใส่ไอคอนของคุณ
-                                        const Text('  Continue with Github'),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(height: 10),
+                                
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [

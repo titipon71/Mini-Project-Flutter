@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:my_app/assets/widgets/vip_status_widget.dart';
+// import 'package:my_app/assets/widgets/vip_status_widget.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -101,7 +101,7 @@ class _TopupScreenState extends State<TopupScreen> {
     // อัปเดต topup กลาง
     final topupRef = fs.collection('topups').doc(topupId);
     batch.update(topupRef, {
-      'status': 'approved',
+      'status': 'paid',
       'paidAt': Timestamp.fromDate(now),
       if (slipokPayload != null) 'slipokPayload': slipokPayload,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -866,6 +866,9 @@ class _TopupScreenState extends State<TopupScreen> {
                                     Navigator.of(
                                       dialogCtx,
                                     ).pop(); // ← ปิดเฉพาะ Dialog
+                                    Navigator.pushReplacement(context, MaterialPageRoute(
+                                      builder: (_) => const Home2Screen(),
+                                    ));
                                   }
 
                                   // (ออปชัน) ถ้าจะฟัง topup ก็ได้ แต่ไม่จำเป็นแล้วเพราะเราตัดสินผลเอง
@@ -1224,9 +1227,7 @@ class _TopupScreenState extends State<TopupScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               _buildStepHeader(),
-              const SizedBox(height: 16),
-           if (uid != null)
-              VipStatusWidget(uid: uid),
+
 
               // เนื้อหาตามขั้น
               Padding(

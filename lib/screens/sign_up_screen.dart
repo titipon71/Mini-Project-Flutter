@@ -362,20 +362,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                   ),
                                 ),
                                 SizedBox(height: 10),
-                                SizedBox(
-                                  height: 48,
-                                  child: OutlinedButton(
-                                    onPressed: signInWithGithub,
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(SimpleIcons.github, size: 20, textDirection: TextDirection.ltr), // ใส่ไอคอนของคุณ
-                                        const Text('  Continue with Github'),
-                                      ],
-                                    ),
-                                  ),
-                                ),
+                                
                                 
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,

@@ -1,6 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:my_app/screens/ChapterReaderPage.dart';
+
+// ✅ เพิ่มสองอันนี้
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class MangaDetailPage extends StatefulWidget {
   final int mangaId; // index จริงใน DB (เริ่มที่ 1)
@@ -25,13 +31,63 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
   bool _loading = true;
   String? _error;
 
+  // ✅ ตัวแปร role
+  bool _isVip = false;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _roleSub;
+
   @override
   void initState() {
     super.initState();
+    _listenUserRole(); // ✅ เริ่มฟัง role ก่อน
     _load();
   }
 
-  // ---------- helpers ----------
+  @override
+  void dispose() {
+    _roleSub?.cancel();
+    super.dispose();
+  }
+
+  // ✅ helper แปลง Timestamp/number → millis
+  int _tsToMs(dynamic ts) {
+    if (ts == null) return 0;
+    if (ts is Timestamp) return ts.millisecondsSinceEpoch;
+    if (ts is num) return ts.toInt();
+    return 0;
+  }
+
+  // ✅ ฟังเอกสาร users/{uid} แบบ realtime แล้วคำนวณ isVip
+  void _listenUserRole() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() => _isVip = false);
+      return;
+    }
+
+    _roleSub?.cancel();
+    _roleSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .snapshots()
+        .listen((doc) {
+      final data = doc.data();
+      bool nextIsVip = false;
+
+      if (data != null && data['roles'] is Map) {
+        final roles = data['roles'] as Map;
+        final vipFlag = roles['vip'] == true;
+        final vipUntilMs = _tsToMs(roles['vipUntil']);
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        nextIsVip = vipFlag && vipUntilMs > nowMs;
+      }
+
+      if (mounted) setState(() => _isVip = nextIsVip);
+    }, onError: (_) {
+      if (mounted) setState(() => _isVip = false);
+    });
+  }
+
+  // ---------- helpers เดิม ----------
   int? _toInt(dynamic v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -45,7 +101,7 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
     if (ms == null || ms <= 0) return '—';
     try {
       final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-      return dt.toString(); // ปรับรูปแบบวันที่ได้ตามต้องการ
+      return dt.toString();
     } catch (_) {
       return '—';
     }
@@ -54,13 +110,13 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
   Future<void> _load() async {
     try {
       final chapters = await _fetchChaptersRobust(widget.mangaId);
-      
+
       // ✅ sort: ตอนน้อยไปมาก (1 → 2 → 3 ...)
-    chapters.sort((a, b) {
-      final na = _toInt(a['number'])?? 0;
-      final nb = _toInt(b['number'])?? 0;
-      return na.compareTo(nb); // ← แก้ตรงนี้ (จากเดิม ub.compareTo(ua))
-    });
+      chapters.sort((a, b) {
+        final na = _toInt(a['number']) ?? 0;
+        final nb = _toInt(b['number']) ?? 0;
+        return na.compareTo(nb);
+      });
 
       setState(() {
         _chapters = chapters;
@@ -84,7 +140,6 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
 
     final data = snap.value;
 
-    // กรณีเป็น List และ index 0 = null (โครงสร้าง 1-based)
     if (data is List) {
       for (var i = 1; i < data.length; i++) {
         final item = data[i];
@@ -99,7 +154,6 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
       return out;
     }
 
-    // กรณีเป็น Map (key เป็น "1","2",…)
     if (data is Map) {
       data.forEach((k, v) {
         if (v is Map) {
@@ -119,6 +173,10 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final caption = _isVip
+        ? 'ตอนทั้งหมด (${_chapters.length} ตอน)'
+        : 'ตอนทั้งหมด (${_chapters.length} ตอน) · (สำหรับสมาชิก VIP เท่านั้น)';
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.name),
@@ -134,7 +192,7 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                   image: NetworkImage(widget.background!),
                   fit: BoxFit.cover,
                   colorFilter: const ColorFilter.mode(
-                    Color.fromARGB(200, 0, 0, 0), // ทำให้ภาพมืดลง
+                    Color.fromARGB(200, 0, 0, 0),
                     BlendMode.darken,
                   ),
                 )
@@ -188,7 +246,6 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
 
                 const SizedBox(height: 16),
 
-                // แสดงสถานะโหลด/ผิดพลาด/ว่าง/รายการตอน
                 if (_loading) ...[
                   const CircularProgressIndicator(),
                 ] else if (_error != null) ...[
@@ -212,7 +269,7 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'ตอนทั้งหมด (${_chapters.length} ตอน)',
+                      caption,
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.9),
                         fontSize: 16,
@@ -222,17 +279,14 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                   ),
                   const SizedBox(height: 8),
 
-                  // ปุ่มตอนแบบ Wrap + OutlinedButton
+                  // ปุ่มตอน
                   Wrap(
                     spacing: 12,
                     runSpacing: 12,
                     children: _chapters.map((ch) {
-                      final numberInt = _toInt(ch['number']) ??
-                          (_chapters.indexOf(ch) + 1);
-                      final title =
-                          (ch['title'] as String?)?.trim() ?? '';
-
-                      // pages: กัน null และนับเฉพาะที่ไม่ใช่ null (เผื่อเอาไว้เช็ค)
+                      final numberInt =
+                          _toInt(ch['number']) ?? (_chapters.indexOf(ch) + 1);
+                      final title = (ch['title'] as String?)?.trim() ?? '';
                       final pages = ch['pages'];
                       final hasAnyPage = (pages is List) &&
                           pages.where((e) => e != null).isNotEmpty;
@@ -250,30 +304,44 @@ class _MangaDetailPageState extends State<MangaDetailPage> {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
+                          // ✅ ปรับสีตอน disable ให้จางลง
+                          disabledForegroundColor:
+                              Colors.white.withOpacity(0.3),
+                          disabledBackgroundColor:
+                              Colors.white.withOpacity(0.05),
                         ),
-                        onPressed: () {
-                          if (hasAnyPage) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ChapterReaderPage(
-                                  mangaName: widget.name,
-                                  chapterNumber: numberInt,
-                                ),
-                              ),
-                            );
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('ตอนนี้ยังไม่มีหน้าให้แสดง'),
-                              ),
-                            );
-                          }
-                        },
-                        child: Text(
-                          title.isNotEmpty
-                              ? title
-                              : 'ตอนที่ $numberInt',
+                        onPressed: !_isVip
+                            ? null // ❌ ไม่ใช่ VIP → ปุ่มกดไม่ได้
+                            : () {
+                                if (hasAnyPage) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ChapterReaderPage(
+                                        mangaName: widget.name,
+                                        chapterNumber: numberInt,
+                                      ),
+                                    ),
+                                  );
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('ตอนนี้ยังไม่มีหน้าให้แสดง'),
+                                    ),
+                                  );
+                                }
+                              },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!_isVip) ...[
+                              const Icon(Icons.lock, size: 16), // 🔒
+                              const SizedBox(width: 6),
+                            ],
+                            Text(title.isNotEmpty
+                                ? title
+                                : 'ตอนที่ $numberInt'),
+                          ],
                         ),
                       );
                     }).toList(),

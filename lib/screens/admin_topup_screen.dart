@@ -16,7 +16,7 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
 
   final _statusOptions = const ['ทั้งหมด', 'pending', 'paid', 'rejected'];
 
-  String _selectedStatus = 'pending'; // ค่าเริ่มต้น: ดูงานรอตรวจ
+  String _selectedStatus = 'ทั้งหมด'; // ค่าเริ่มต้น: ดูงานรอตรวจ
   String _search = ''; // ค้นหา topupId หรือ userId
   DocumentSnapshot? _lastDoc; // สำหรับโหลดเพิ่ม
   bool _isLoadingMore = false;
@@ -549,7 +549,7 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                         ),
                       ),
                     const SizedBox(width: 8),
-                    if (status != 'rejected')
+                    if (status != 'rejected' && status != 'paid')
                       ElevatedButton.icon(
                         onPressed: () => _confirmAndUpdate(
                           'ปฏิเสธ',

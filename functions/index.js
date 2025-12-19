@@ -2,17 +2,18 @@
 /* eslint-disable */
 exports.slipokProxy = require("./slipokProxy").slipokProxy;
 
-
+const { onCall } = require("firebase-functions/v2/https");
 const { onRequest } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const cors = require("cors")({ origin: true });
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 
 initializeApp();
 const db = getFirestore();
 const auth = getAuth();
+function daysToMs(d) { return Number(d || 0) * 24 * 60 * 60 * 1000; }
 
 function onlyDigits(s = "") {
   return String(s || "").replace(/\D+/g, "");
@@ -271,4 +272,129 @@ exports.manualVerify = onRequest(
   }
 );
 
+exports.setUserRole = onCall({ region: "asia-southeast1" }, async (req) => {
+  try {
+    // ---------- 1) ตรวจสิทธิ์ผู้เรียก (ต้องเป็น admin ผ่าน custom claims) ----------
+    const caller = req.auth;
+    if (!caller || caller.token?.admin !== true) {
+      return { ok: false, error: "permission-denied: admin only" };
+    }
 
+    // ---------- 2) รับพารามิเตอร์ ----------
+    const { uid, role, durationDays, extend } = req.data || {};
+    if (!uid) return { ok: false, error: "missing uid" };
+
+    const allowed = new Set(["user", "vip", "admin"]);
+    if (!allowed.has(role)) return { ok: false, error: "invalid role" };
+
+    // ---------- 3) เตรียมข้อมูลเดิม (claims + firestore) ----------
+    const [userRec, userDocSnap] = await Promise.all([
+      auth.getUser(uid),
+      db.collection("users").doc(uid).get(),
+    ]);
+
+    const now = Date.now();
+
+    // อ่าน vipUntil เดิม (จาก claims ก่อน, ถ้าไม่มีค่อยดู Firestore)
+    const oldClaims = userRec.customClaims || {};
+    let baseMs = now;
+    const claimsVipUntil = typeof oldClaims.vipUntil === "number" ? oldClaims.vipUntil : 0;
+
+    // Firestore vipUntil เดิม
+    let fsVipUntilMs = 0;
+    if (userDocSnap.exists) {
+      const r = userDocSnap.get("roles");
+      if (r && r.vipUntil && typeof r.vipUntil.toMillis === "function") {
+        fsVipUntilMs = r.vipUntil.toMillis();
+      }
+    }
+
+    if (extend === true) {
+      // ทบจากอันที่ "ยังไม่หมดอายุ" สูงสุด
+      const candidates = [claimsVipUntil, fsVipUntilMs].filter((x) => x > now);
+      if (candidates.length > 0) {
+        baseMs = Math.max(...candidates);
+      }
+    }
+
+    // ---------- 4) คำนวณค่าใหม่ตาม role ----------
+    let newClaims = { ...oldClaims };
+    // เคลียร์คีย์ที่เกี่ยวกับ role ก่อน (เพื่อเลี่ยงค่าเก่าค้าง)
+    delete newClaims.admin;
+    delete newClaims.vip;
+    delete newClaims.vipUntil;
+
+    let rolesUpdate = {
+      admin: false,
+      vip: false,
+      // vipUntil จะใส่/ลบแยกต่างหาก
+    };
+
+    let vipUntilMs = 0;
+
+    if (role === "admin") {
+      newClaims.admin = true;
+      rolesUpdate.admin = true;
+      rolesUpdate.vip = false;
+    } else if (role === "vip") {
+      const days = Number.isFinite(Number(durationDays)) && Number(durationDays) > 0
+        ? Number(durationDays)
+        : 30; // ค่า default = 30 วัน
+      vipUntilMs = baseMs + daysToMs(days);
+
+      newClaims.vip = true;
+      newClaims.vipUntil = vipUntilMs;
+
+      rolesUpdate.vip = true;
+    } else {
+      // role === "user" => ไม่มี admin, ไม่มี vip
+      // newClaims ไม่มี admin/vip/vipUntil
+      rolesUpdate.admin = false;
+      rolesUpdate.vip = false;
+    }
+
+    // ---------- 5) เขียน Custom Claims ----------
+    await auth.setCustomUserClaims(uid, newClaims);
+    await auth.revokeRefreshTokens(uid); // ✅ เพิ่มบรรทัดนี้
+
+
+    // ---------- 6) เขียน Firestore users/{uid}.roles ----------
+    const userRef = db.collection("users").doc(uid);
+    const updatePayload = {
+      "roles.admin": rolesUpdate.admin,
+      "roles.vip": rolesUpdate.vip,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (role === "vip") {
+      updatePayload["roles.vipUntil"] = Timestamp.fromMillis(vipUntilMs);
+    } else {
+      // ถ้าไม่ใช่ VIP ให้ลบ vipUntil ออก
+      updatePayload["roles.vipUntil"] = FieldValue.delete();
+    }
+
+    await userRef.set(updatePayload, { merge: true });
+
+    // ---------- 7) ตอบกลับ ----------
+    return {
+      ok: true,
+      uid,
+      role,
+      claims: newClaims,
+      roles: {
+        admin: rolesUpdate.admin,
+        vip: rolesUpdate.vip,
+        vipUntil: role === "vip" ? vipUntilMs : null,
+      },
+    };
+  } catch (err) {
+    console.error("[setUserRole] error:", err);
+    return { ok: false, error: String(err && err.message || err) };
+  }
+});
+
+exports.forceRefreshToken = onCall(async (req) => {
+  const uid = req.auth.uid;
+  await auth.revokeRefreshTokens(uid);
+  return { ok: true };
+});
