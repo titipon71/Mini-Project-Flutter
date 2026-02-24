@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:my_app/screens/home2_screen.dart';
-import 'package:my_app/screens/sign_in_screen.dart';
+import 'package:Twebtoon/screens/home2_screen.dart';
+import 'package:Twebtoon/screens/sign_in_screen.dart';
 import 'package:simple_icons/simple_icons.dart';
 import 'welcome_screen.dart'; // ใช้ AbstractBackground + shared atoms
 import 'package:firebase_auth/firebase_auth.dart';

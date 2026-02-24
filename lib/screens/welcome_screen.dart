@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:my_app/screens/sign_in_screen.dart';
-import 'package:my_app/screens/sign_up_screen.dart';
+import 'package:Twebtoon/screens/sign_in_screen.dart';
+import 'package:Twebtoon/screens/sign_up_screen.dart';
 import 'dart:math';
 import 'static_blobs.dart';
 

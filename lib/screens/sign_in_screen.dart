@@ -2,10 +2,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:my_app/screens/home2_screen.dart';
-import 'package:my_app/screens/sign_up_screen.dart';
+import 'package:Twebtoon/screens/home2_screen.dart';
+import 'package:Twebtoon/screens/sign_up_screen.dart';
 import 'package:simple_icons/simple_icons.dart';
-// import 'package:my_app/screens/onboarding_screen.dart';
+// import 'package:Twebtoon/screens/onboarding_screen.dart';
 import 'welcome_screen.dart'; // ใช้ AbstractBackground + shared atoms
 
 class SignInScreen extends StatefulWidget {

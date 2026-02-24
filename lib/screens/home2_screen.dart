@@ -1,8 +1,9 @@
+import 'package:Twebtoon/assets/widgets/example_sidebarx.dart';
+import 'package:Twebtoon/screens/MangaDetail_screen.dart';
+import 'package:Twebtoon/screens/navbar2_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
-import 'package:my_app/assets/widgets/example_sidebarx.dart';
-import 'package:my_app/screens/MangaDetail_screen.dart';
-import 'package:my_app/screens/navbar2_screen.dart';
+
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'package:firebase_auth/firebase_auth.dart';

@@ -1,13 +1,13 @@
 // admin_dashboard_screen.dart
+import 'package:Twebtoon/screens/add_manga_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:my_app/screens/add_chapter_screen.dart';
-import 'package:my_app/screens/add_manga_screen.dart';
-import 'package:my_app/screens/admin_topup_screen.dart';
-import 'package:my_app/screens/edit_chapter_screen.dart';
-import 'package:my_app/screens/edit_manga_screen.dart';
-import 'package:my_app/screens/edit_websiteinfo_screen.dart';
-import 'package:my_app/screens/make_role_screen.dart';
+import 'package:Twebtoon/screens/add_chapter_screen.dart';
+import 'package:Twebtoon/screens/admin_topup_screen.dart';
+import 'package:Twebtoon/screens/edit_chapter_screen.dart';
+import 'package:Twebtoon/screens/edit_manga_screen.dart';
+import 'package:Twebtoon/screens/edit_websiteinfo_screen.dart';
+import 'package:Twebtoon/screens/make_role_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});

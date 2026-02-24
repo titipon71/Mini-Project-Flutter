@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:my_app/screens/home2_screen.dart';
+import 'package:Twebtoon/screens/home2_screen.dart';
 import 'firebase_options.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:device_preview/device_preview.dart';
