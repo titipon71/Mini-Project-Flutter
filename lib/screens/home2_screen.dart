@@ -3,12 +3,10 @@ import 'package:Twebtoon/screens/MangaDetail_screen.dart';
 import 'package:Twebtoon/screens/navbar2_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
-
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'package:sidebarx/sidebarx.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'dart:convert'; // เพิ่ม import นี้
+import 'package:Twebtoon/services/api_service.dart';
+import 'dart:convert';
 
 // imgInformationList จะถูกโหลดจาก Firebase แทน
 
@@ -58,34 +56,21 @@ class _Home2ScreenState extends State<Home2Screen>
     fetchCarouselImages();
   }
 
-  // โหลดรูปภาพสำหรับ carousel จาก Firebase
+  // โหลดรูปภาพ carousel จาก API
   Future<void> fetchCarouselImages() async {
     try {
-      final ref = FirebaseDatabase.instance.ref('website_info/carousel_images');
-
-      final snapshot = await ref.get();
-      List<String> imagesList = [];
-
-      if (snapshot.exists) {
-        final value = snapshot.value;
-
-        if (value is List) {
-          imagesList = value
-              .where((item) => item is String && item.isNotEmpty)
-              .cast<String>()
-              .toList();
-        } else if (value is Map) {
-          imagesList = value.values
-              .where((item) => item is String && item.isNotEmpty)
-              .cast<String>()
-              .toList();
-        }
+      final response = await ApiService.get('/api/v1/website-info');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final images = (json['carouselImages'] as List<dynamic>)
+            .whereType<String>()
+            .where((s) => s.isNotEmpty)
+            .toList();
+        setState(() {
+          imgInformationList = images;
+          _current = 0;
+        });
       }
-
-      setState(() {
-        imgInformationList = imagesList;
-        _current = 0; // กัน out-of-range เสมอ
-      });
     } catch (_) {
       setState(() {
         imgInformationList = [];
@@ -94,13 +79,12 @@ class _Home2ScreenState extends State<Home2Screen>
     }
   }
 
-  // ย้าย function fetchMangaDB เข้ามาใน class
+  // โหลดรายการมังงะจาก API
   Future<void> fetchMangaDB() async {
-    final databaseRef = FirebaseDatabase.instance.ref('mangas');
     try {
-      final snapshot = await databaseRef.get();
+      final response = await ApiService.get('/api/v1/mangas?limit=100');
 
-      if (!snapshot.exists) {
+      if (response.statusCode != 200) {
         setState(() {
           mangas = [];
           latestUpdatedMangas = [];
@@ -109,76 +93,26 @@ class _Home2ScreenState extends State<Home2Screen>
         return;
       }
 
-      final raw = snapshot.value;
-      final List<Map<String, dynamic>> mangaList = [];
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final items = (json['items'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
 
-      if (raw is Map) {
-        // ถ้าเป็น Map: พยายาม parse key เป็นเลข index จริง
-        raw.forEach((key, data) {
-          if (data is Map) {
-            final m = Map<String, dynamic>.from(data);
-            final idx = int.tryParse(key.toString());
-            if (idx != null && idx > 0) {
-              m['__dbIndex'] = idx; // <---- เก็บ index 1-based
-            }
-            mangaList.add(m);
-          }
-        });
-      } else if (raw is List) {
-        // ถ้าเป็น List: ข้าม index 0 (ที่เป็น null) แล้วเก็บ index จริงไว้
-        for (var i = 1; i < raw.length; i++) {
-          final e = raw[i];
-          if (e is Map) {
-            final m = Map<String, dynamic>.from(e);
-            m['__dbIndex'] = i; // <---- เก็บ index 1-based
-            mangaList.add(m);
-          }
-        }
-      }
-
-      // คำนวณเวลาอัปเดตล่าสุดต่อเรื่อง (รองรับ chapters เป็น List/Map)
-      List<Map<String, dynamic>> withLatest = mangaList.map((manga) {
-        int latestUpdateTime = 0;
-
-        final chapters = manga['chapters'];
-        Iterable chapterValues;
-        if (chapters is List) {
-          chapterValues = chapters.where((c) => c != null);
-        } else if (chapters is Map) {
-          chapterValues = chapters.values.where((c) => c != null);
-        } else {
-          chapterValues = const [];
-        }
-
-        for (final ch in chapterValues) {
-          if (ch is Map && ch['updatedAt'] != null) {
-            final rawTime = ch['updatedAt'];
-            int? ms;
-            if (rawTime is int) {
-              ms = rawTime;
-            } else if (rawTime is String) {
-              ms = int.tryParse(rawTime);
-            }
-            if (ms != null && ms > latestUpdateTime) {
-              latestUpdateTime = ms;
-            }
-          }
-        }
-
-        return {...manga, 'latestUpdateTime': latestUpdateTime};
-      }).toList();
-
-      withLatest.sort(
-        (a, b) =>
-            (b['latestUpdateTime'] ?? 0).compareTo(a['latestUpdateTime'] ?? 0),
-      );
+      // เรียงตาม latestUpdatedAt สำหรับส่วน "อัปเดตล่าสุด"
+      final withLatest = List<Map<String, dynamic>>.from(items);
+      withLatest.sort((a, b) {
+        final ta = DateTime.tryParse(a['latestUpdatedAt'] ?? '') ??
+            DateTime(2000);
+        final tb = DateTime.tryParse(b['latestUpdatedAt'] ?? '') ??
+            DateTime(2000);
+        return tb.compareTo(ta);
+      });
 
       setState(() {
-        mangas = mangaList; // <-- มี __dbIndex อยู่แล้ว
-        latestUpdatedMangas = withLatest; // <-- ยังพก __dbIndex มาด้วย
+        mangas = items;
+        latestUpdatedMangas = withLatest;
         isLoading = false;
       });
-    } catch (e) {
+    } catch (_) {
       setState(() {
         mangas = [];
         latestUpdatedMangas = [];
@@ -299,20 +233,19 @@ class _Home2ScreenState extends State<Home2Screen>
                       width: 150,
                       child: InkWell(
                         onTap: () {
-                          final dbIndex = (manga['__dbIndex'] as int?) ?? 0;
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => MangaDetailPage(
-                                mangaId: dbIndex,
-                                cover: manga['cover'] ?? '',
+                                mangaId: manga['id'] as int,
+                                cover: manga['coverUrl'] ?? '',
                                 name: manga['name'] ?? 'ไม่มีชื่อ',
-                                background: manga['background'],
+                                background: manga['backgroundUrl'],
                               ),
                             ),
                           );
                         },
-                        child: _mangaCard(manga['cover'], manga['name']),
+                        child: _mangaCard(manga['coverUrl'], manga['name']),
                       ),
                     );
                   }).toList(),
@@ -341,30 +274,26 @@ class _Home2ScreenState extends State<Home2Screen>
                       width: 150,
                       child: InkWell(
                         onTap: () {
-                          final dbIndex = (manga['__dbIndex'] as int?) ?? 0;
-
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => MangaDetailPage(
-                                mangaId: dbIndex,
-                                cover: manga['cover'] ?? '',
+                                mangaId: manga['id'] as int,
+                                cover: manga['coverUrl'] ?? '',
                                 name: manga['name'] ?? 'ไม่มีชื่อ',
-                                background: manga['background'],
+                                background: manga['backgroundUrl'],
                               ),
                             ),
                           );
                         },
                         child: Column(
                           children: [
-                            _mangaCard(manga['cover'], manga['name']),
-                            // แสดงวันที่อัปเดตล่าสุด
-                            if (manga['latestUpdateTime'] != null &&
-                                manga['latestUpdateTime'] > 0)
+                            _mangaCard(manga['coverUrl'], manga['name']),
+                            if ((manga['latestUpdatedAt'] as String?) != null)
                               Padding(
                                 padding: const EdgeInsets.only(top: 4),
                                 child: Text(
-                                  'อัปเดต: ${_formatDate(manga['latestUpdateTime'])}',
+                                  'อัปเดต: ${_formatDate(manga['latestUpdatedAt'])}',
                                   style: TextStyle(
                                     fontSize: 10,
                                     color: Colors.white.withOpacity(0.7),
@@ -549,9 +478,11 @@ class _Home2ScreenState extends State<Home2Screen>
     }
   }
 
-  // เพิ่ม function สำหรับแปลง timestamp เป็นวันที่
-  String _formatDate(int timestamp) {
-    DateTime date = DateTime.fromMillisecondsSinceEpoch(timestamp);
+  // แปลง ISO datetime string เป็นข้อความสัมพัทธ์
+  String _formatDate(String? isoString) {
+    if (isoString == null) return '';
+    final date = DateTime.tryParse(isoString);
+    if (date == null) return '';
     DateTime now = DateTime.now();
 
     Duration difference = now.difference(date);

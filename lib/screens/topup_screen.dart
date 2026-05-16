@@ -1,10 +1,8 @@
 import 'dart:async';
-// import 'package:my_app/assets/widgets/vip_status_widget.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:Twebtoon/services/api_service.dart';
 import 'package:flutter/rendering.dart';
 import 'package:http/http.dart' as http;
 import 'package:Twebtoon/assets/widgets/example_sidebarx.dart';
@@ -30,7 +28,8 @@ class SubscriptionOption {
   SubscriptionOption(this.label, this.price, this.value, {this.tag});
 }
 
-const String _SLIPOK_URL = 'https://slipokproxy-q3rjxjrnoq-as.a.run.app';
+// SlipOK proxy ย้ายไปอยู่ที่ FastAPI backend แล้ว
+String get _SLIPOK_URL => '${ApiService.baseUrl}/api/v1/payments/slipok/verify';
 
 
 class TopupScreen extends StatefulWidget {
@@ -41,7 +40,7 @@ class TopupScreen extends StatefulWidget {
 }
 
 class _TopupScreenState extends State<TopupScreen> {
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _topupSub;
+  StreamSubscription? _topupSub;
   final GlobalKey _qrKey = GlobalKey();
   final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final stepProgressController = StepProgressController(
@@ -54,13 +53,22 @@ class _TopupScreenState extends State<TopupScreen> {
     return double.tryParse(priceText.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0.0;
   }
 
-  Stream<bool> _vipStream(String uid) {
-  return FirebaseFirestore.instance
-      .collection('users')
-      .doc(uid)
-      .snapshots()
-      .map((s) => (s.data()?['roles']?['vip'] ?? false) as bool);
-}
+  Stream<bool> _vipStream(String uid) async* {
+    while (true) {
+      try {
+        final response = await ApiService.get('/api/v1/me/roles');
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          yield json['vip'] == true;
+        } else {
+          yield false;
+        }
+      } catch (_) {
+        yield false;
+      }
+      await Future.delayed(const Duration(seconds: 30));
+    }
+  }
 
 
   bool isUploadingSlip = false;
@@ -92,45 +100,10 @@ class _TopupScreenState extends State<TopupScreen> {
     required int days,
     Map<String, dynamic>? slipokPayload,
   }) async {
-    final fs = FirebaseFirestore.instance;
-    final now = DateTime.now();
-    final vipUntil = now.add(Duration(days: days));
-
-    final batch = fs.batch();
-
-    // อัปเดต topup กลาง
-    final topupRef = fs.collection('topups').doc(topupId);
-    batch.update(topupRef, {
+    await ApiService.patch('/api/v1/admin/topups/$topupId', {
       'status': 'paid',
-      'paidAt': Timestamp.fromDate(now),
       if (slipokPayload != null) 'slipokPayload': slipokPayload,
-      'updatedAt': FieldValue.serverTimestamp(),
     });
-
-    // ซ้ำใต้ user
-    final underUser = fs
-        .collection('users')
-        .doc(uid)
-        .collection('topups')
-        .doc(topupId);
-    batch.set(underUser, {
-      'status': 'approved',
-      'paidAt': Timestamp.fromDate(now),
-      if (slipokPayload != null) 'slipokPayload': slipokPayload,
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    // ตีตรา VIP ใน users/{uid}
-    final userRef = fs.collection('users').doc(uid);
-    batch.set(userRef, {
-      'roles': {'vip': true, 'vipUntil': Timestamp.fromDate(vipUntil)},
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    await batch.commit();
-
-    // ให้ token รีเฟรชเผื่อคุณมี logic อื่นอาศัย token
-    await FirebaseAuth.instance.currentUser?.getIdToken(true);
   }
 
   Future<bool> _verifyWithSlipOK({
@@ -188,15 +161,10 @@ class _TopupScreenState extends State<TopupScreen> {
         _showSnack('✅ ตรวจสลิปผ่าน • อัปเดต VIP แล้ว');
         return true; // ← บอกว่าผ่าน
       } else {
-        await FirebaseFirestore.instance
-            .collection('topups')
-            .doc(topupId)
-            .update({
-              // 'status': 'failed',
-              'failReason': success ? 'amount_mismatch' : 'slip_verify_failed',
-              'slipokPayload': jsonMap,
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
+        await ApiService.patch('/api/v1/admin/topups/$topupId', {
+          'status': 'pending',
+          'failReason': success ? 'amount_mismatch' : 'slip_verify_failed',
+        });
         _showSnack('❌ ตรวจสลิปไม่ผ่าน');
         return false;
       }
@@ -208,20 +176,26 @@ class _TopupScreenState extends State<TopupScreen> {
   }
 
   Future<String?> _uploadSlipToStorage(String topupId) async {
-    // ถ้าไม่มีสลิป ก็ไม่ต้องอัปโหลด
     if (slipBytes == null || slipBytes!.isEmpty) return null;
 
-    final uid = user?.uid ?? 'anonymous';
     final fileName =
         slipFileName ?? 'slip_${DateTime.now().millisecondsSinceEpoch}.png';
-    final path = 'topup_slips/$uid/$topupId/$fileName';
 
-    final ref = FirebaseStorage.instance.ref().child(path);
-    final meta = SettableMetadata(contentType: 'image/png');
+    final response = await ApiService.uploadBytes(
+      bytes: slipBytes!,
+      filename: fileName,
+      purpose: 'topup-slip',
+      topupId: topupId,
+    );
 
-    await ref.putData(slipBytes!, meta);
-    final url = await ref.getDownloadURL();
-    return url;
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final url = (json['asset'] as Map<String, dynamic>)['url'] as String?;
+      if (url != null) {
+        return '${ApiService.baseUrl}$url';
+      }
+    }
+    return null;
   }
 
   Future<void> _requestManualVerify({
@@ -229,15 +203,9 @@ class _TopupScreenState extends State<TopupScreen> {
     required String refCode,
     required String slipUrl,
   }) async {
-    final uri = Uri.parse('https://manualverify-q3rjxjrnoq-as.a.run.app/m');
-    final res = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'topupId': topupId,
-        'refCode': refCode,
-        'slipUrl': slipUrl,
-      }),
+    final res = await ApiService.post(
+      '/api/v1/payments/topups/$topupId/manual-verify',
+      {'slipUrl': slipUrl},
     );
     if (res.statusCode != 200) {
       _showSnack('ตรวจสลิปไม่สำเร็จ (${res.statusCode})');
@@ -245,61 +213,37 @@ class _TopupScreenState extends State<TopupScreen> {
   }
 
   Future<String> _saveTopupToFirestore({
-    required String topupId, // <-- เพิ่ม
+    required String topupId,
     required String userId,
     required String? userName,
     required SubscriptionOption option,
     required String paymentMethod,
-    required String refCode, // <-- เพิ่ม
+    required String refCode,
     String? referralCode,
     String? slipUrl,
   }) async {
-    final fs = FirebaseFirestore.instance;
     final amount = _parsePrice(option.price);
-    final now = FieldValue.serverTimestamp();
+    final expiresAt = DateTime.now().add(const Duration(hours: 48));
 
-    final data = {
+    await ApiService.post('/api/v1/topups', {
       'topupId': topupId,
-      'userId': userId,
       'userName': userName ?? userId,
       'packageLabel': option.label,
       'packageValue': option.value,
       'priceText': option.price,
       'amount': amount,
-      'amountExpected': amount, // ค่า canonical ที่ webhook/manual จะเทียบ
+      'amountExpected': amount,
       'paymentMethod': paymentMethod,
-      'status': 'pending',
-      'refCode': refCode, // <-- สำคัญ
+      'refCode': refCode,
       'referral': (referralCode?.isNotEmpty ?? false) ? referralCode : null,
-      'slip': slipUrl != null
-          ? {'fileName': slipFileName, 'downloadUrl': slipUrl}
-          : null,
+      'slipUrl': slipUrl,
       'platform': kIsWeb ? 'web' : 'mobile',
-      'createdAt': now,
-      'updatedAt': now,
       'qrAmount': amount,
       'qrTarget': '0876947022',
-      // สำหรับเปลี่ยนสิทธิ์อัตโนมัติ
       'roleTarget': 'vip',
-      'durationDays': _mapPackageToDays(
-        option.value,
-      ), // สร้างฟังก์ชันแปลงแพ็กเกจ -> วัน
-      // กันสลิปเก่า
-      'expiresAt': Timestamp.fromDate(
-        DateTime.now().add(const Duration(hours: 48)),
-      ),
-    };
-
-    final batch = fs.batch();
-    final central = fs.collection('topups').doc(topupId);
-    final underUser = fs
-        .collection('users')
-        .doc(userId)
-        .collection('topups')
-        .doc(topupId);
-    batch.set(central, data);
-    batch.set(underUser, data);
-    await batch.commit();
+      'durationDays': _mapPackageToDays(option.value),
+      'expiresAt': expiresAt.toIso8601String(),
+    });
     return topupId;
   }
 
@@ -326,22 +270,18 @@ class _TopupScreenState extends State<TopupScreen> {
   }
 
   void _listenTopup(String topupId) {
-    _topupSub?.cancel(); // ยกเลิกของเดิมถ้ามี
-    _topupSub = FirebaseFirestore.instance
-        .collection('topups')
-        .doc(topupId)
-        .snapshots()
-        .listen((snap) async {
-          if (!snap.exists) return;
-          final data = snap.data()!;
-          if (data['status'] == 'approved') {
-            await FirebaseAuth.instance.currentUser?.getIdToken(true);
-            _showSnack('✅ ยืนยันการชำระแล้ว! สิทธิ์ถูกอัปเดต');
-            if (mounted) Navigator.of(context).pop(); // ปิด dialog
-            // ถ้าต้องการไปหน้า success ค่อยนำทางต่อจากที่นี่
-            // if (mounted) Navigator.pushReplacement(...);
-          }
-        });
+    _topupSub?.cancel();
+    // poll สถานะทุก 5 วินาที แทน Firestore realtime listener
+    _topupSub = Stream.periodic(const Duration(seconds: 5))
+        .asyncMap((_) => ApiService.get('/api/v1/topups/$topupId'))
+        .listen((response) async {
+      if (response.statusCode != 200) return;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (data['status'] == 'approved' || data['status'] == 'paid') {
+        _showSnack('✅ ยืนยันการชำระแล้ว! สิทธิ์ถูกอัปเดต');
+        if (mounted) Navigator.of(context).pop();
+      }
+    });
   }
 
   Future<void> _pickAndUploadSlip({
@@ -809,10 +749,8 @@ class _TopupScreenState extends State<TopupScreen> {
                                   refresh(() => isSavingTopup = true);
 
                                   // 1) เตรียม topupId
-                                  final topupId = FirebaseFirestore.instance
-                                      .collection('topups')
-                                      .doc()
-                                      .id;
+                                  // สร้าง UUID แทน Firestore auto-id
+                                  final topupId = DateTime.now().millisecondsSinceEpoch.toString();
 
                                   // 2) อัปโหลดสลิป (ถ้ามี)
                                   String? slipUrl;

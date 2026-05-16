@@ -4,10 +4,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
+import jwt
 
 from app.database import AsyncSessionLocal
 from app.models.user import User
-from app.services.firebase_auth import verify_id_token
+from app.services.jwt_service import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -25,24 +26,21 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
     try:
-        decoded = verify_id_token(credentials.credentials)
-    except Exception:
+        payload = decode_access_token(credentials.credentials)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-    uid = decoded["uid"]
+    uid = payload.get("sub")
+    if not uid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
     result = await db.execute(select(User).where(User.uid == uid))
     user = result.scalar_one_or_none()
 
     if user is None:
-        user = User(
-            uid=uid,
-            email=decoded.get("email"),
-            display_name=decoded.get("name"),
-            photo_url=decoded.get("picture"),
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     return user
 

@@ -1,7 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:Twebtoon/services/api_service.dart';
 
 class AdminTopupScreen extends StatefulWidget {
   const AdminTopupScreen({Key? key}) : super(key: key);
@@ -11,40 +11,27 @@ class AdminTopupScreen extends StatefulWidget {
 }
 
 class _AdminTopupScreenState extends State<AdminTopupScreen> {
-  final _auth = FirebaseAuth.instance;
-  final _fs = FirebaseFirestore.instance;
-
   final _statusOptions = const ['ทั้งหมด', 'pending', 'paid', 'rejected'];
 
-  String _selectedStatus = 'ทั้งหมด'; // ค่าเริ่มต้น: ดูงานรอตรวจ
-  String _search = ''; // ค้นหา topupId หรือ userId
-  DocumentSnapshot? _lastDoc; // สำหรับโหลดเพิ่ม
+  String _selectedStatus = 'ทั้งหมด';
+  String _search = '';
+  int _skip = 0;
   bool _isLoadingMore = false;
   bool _hasMore = true;
   final int _pageSize = 30;
 
-  final List<QueryDocumentSnapshot<Map<String, dynamic>>> _buffer = [];
+  final List<Map<String, dynamic>> _buffer = [];
 
-  // โหลดหน้าแรก
   @override
   void initState() {
     super.initState();
     _loadInitial();
   }
 
-  Query<Map<String, dynamic>> _baseQuery() {
-    var q = _fs.collection('topups').orderBy('createdAt', descending: true);
-    if (_selectedStatus != 'ทั้งหมด') {
-      q = q.where('status', isEqualTo: _selectedStatus);
-    }
-    // หมายเหตุ: การ orderBy + where อาจต้องสร้าง composite index ใน Firestore Console
-    return q;
-  }
-
   Future<void> _loadInitial() async {
     setState(() {
       _buffer.clear();
-      _lastDoc = null;
+      _skip = 0;
       _hasMore = true;
     });
     await _loadMore();
@@ -54,26 +41,36 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
     if (!_hasMore || _isLoadingMore) return;
     setState(() => _isLoadingMore = true);
 
-    Query<Map<String, dynamic>> q = _baseQuery().limit(_pageSize);
-    if (_lastDoc != null) q = q.startAfterDocument(_lastDoc!);
+    try {
+      var url = '/api/v1/admin/topups?limit=$_pageSize&skip=$_skip';
+      if (_selectedStatus != 'ทั้งหมด') url += '&topup_status=$_selectedStatus';
 
-    final snap = await q.get();
-    if (snap.docs.isNotEmpty) {
-      _lastDoc = snap.docs.last;
-      _buffer.addAll(snap.docs);
-    } else {
+      final response = await ApiService.get(url);
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final items = (json['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+        if (items.isNotEmpty) {
+          _buffer.addAll(items);
+          _skip += items.length;
+          _hasMore = items.length == _pageSize;
+        } else {
+          _hasMore = false;
+        }
+      } else {
+        _hasMore = false;
+      }
+    } catch (_) {
       _hasMore = false;
     }
 
-    setState(() => _isLoadingMore = false);
+    if (mounted) setState(() => _isLoadingMore = false);
   }
 
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> _filtered() {
+  List<Map<String, dynamic>> _filtered() {
     if (_search.trim().isEmpty) return _buffer;
     final key = _search.trim().toLowerCase();
-    return _buffer.where((d) {
-      final data = d.data();
-      final tid = (data['topupId'] ?? d.id).toString().toLowerCase();
+    return _buffer.where((data) {
+      final tid = (data['topupId'] ?? data['id'] ?? '').toString().toLowerCase();
       final uid = (data['userId'] ?? '').toString().toLowerCase();
       final name = (data['userName'] ?? '').toString().toLowerCase();
       return tid.contains(key) || uid.contains(key) || name.contains(key);
@@ -83,9 +80,7 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
   Future<void> _copy(String text) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('คัดลอกแล้ว')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('คัดลอกแล้ว')));
   }
 
   void _showSlip(Map<String, dynamic>? slip) {
@@ -107,13 +102,8 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                     const Icon(Icons.image, color: Colors.white70),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        fileName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      child: Text(fileName,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
                     ),
                     IconButton(
                       icon: const Icon(Icons.copy, color: Colors.white70),
@@ -133,20 +123,14 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                         fit: BoxFit.contain,
                         errorBuilder: (_, __, ___) {
                           return const Center(
-                            child: Text(
-                              'แสดงภาพไม่สำเร็จ',
-                              style: TextStyle(color: Colors.white70),
-                            ),
+                            child: Text('แสดงภาพไม่สำเร็จ', style: TextStyle(color: Colors.white70)),
                           );
                         },
                       ),
                     ),
                   )
                 else
-                  const Text(
-                    'ไม่มีสลิปแนบ',
-                    style: TextStyle(color: Colors.white70),
-                  ),
+                  const Text('ไม่มีสลิปแนบ', style: TextStyle(color: Colors.white70)),
                 const SizedBox(height: 12),
               ],
             ),
@@ -156,9 +140,10 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
     );
   }
 
-  String _fmtDate(Timestamp? ts) {
-    if (ts == null) return '-';
-    final dt = ts.toDate().toLocal();
+  String _fmtDate(String? iso) {
+    if (iso == null) return '-';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '-';
     String two(int n) => n.toString().padLeft(2, '0');
     return '${dt.year}-${two(dt.month)}-${two(dt.day)}  ${two(dt.hour)}:${two(dt.minute)}';
   }
@@ -171,60 +156,46 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
         return Colors.orange;
       case 'rejected':
         return Colors.redAccent;
-
       default:
         return Colors.blueGrey;
     }
   }
 
-  Future<void> _updateStatus({
-    required String topupId,
-    required String userId,
-    required String newStatus, // 'paid' | 'rejected'
-  }) async {
+  Future<void> _updateStatus({required String topupId, required String newStatus}) async {
     try {
-      final now = FieldValue.serverTimestamp();
-      final central = _fs.collection('topups').doc(topupId);
-      final underUser = _fs
-          .collection('users')
-          .doc(userId)
-          .collection('topups')
-          .doc(topupId);
-
-      final batch = _fs.batch();
-      batch.update(central, {'status': newStatus, 'updatedAt': now});
-      batch.update(underUser, {'status': newStatus, 'updatedAt': now});
-      await batch.commit();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('อัปเดตสถานะ #$topupId → $newStatus สำเร็จ')),
+      final response = await ApiService.patch(
+        '/api/v1/admin/topups/$topupId',
+        {'status': newStatus},
       );
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('อัปเดตสถานะ #$topupId → $newStatus สำเร็จ')),
+        );
+        await _loadInitial();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('อัปเดตไม่สำเร็จ (${response.statusCode})')),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('อัปเดตไม่สำเร็จ: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('อัปเดตไม่สำเร็จ: $e')),
+        );
+      }
     }
   }
 
   Future<void> _confirmAndUpdate(
-    String actionName,
-    String newStatus,
-    String topupId,
-    String userId,
-  ) async {
+      String actionName, String newStatus, String topupId, String userId) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: Colors.grey[900],
-        title: Text(
-          'ยืนยัน$actionName?',
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: Text(
-          'ออเดอร์ #$topupId จะถูกเปลี่ยนสถานะเป็น "$newStatus"',
-          style: const TextStyle(color: Colors.white70),
-        ),
+        title: Text('ยืนยัน$actionName?', style: const TextStyle(color: Colors.white)),
+        content: Text('ออเดอร์ #$topupId จะถูกเปลี่ยนสถานะเป็น "$newStatus"',
+            style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -232,20 +203,13 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              'ยืนยัน',
-              style: TextStyle(color: Colors.greenAccent),
-            ),
+            child: const Text('ยืนยัน', style: TextStyle(color: Colors.greenAccent)),
           ),
         ],
       ),
     );
     if (ok == true) {
-      await _updateStatus(
-        topupId: topupId,
-        userId: userId,
-        newStatus: newStatus,
-      );
+      await _updateStatus(topupId: topupId, newStatus: newStatus);
     }
   }
 
@@ -256,28 +220,18 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // แถวบน: ชื่อหัวข้อ
           Row(
             children: const [
               Icon(Icons.admin_panel_settings, color: Colors.white70),
               SizedBox(width: 8),
-              Text(
-                'แอดมิน: จัดการคำสั่งเติมเงิน',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
+              Text('แอดมิน: จัดการคำสั่งเติมเงิน',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
             ],
           ),
-
           const SizedBox(height: 12),
-
-          // แถวล่าง: ช่องค้นหา + dropdown กรองสถานะ
           Row(
             children: [
-              // ช่องค้นหา (ขยายเต็มความกว้าง)
               Expanded(
                 child: TextField(
                   style: const TextStyle(color: Colors.white),
@@ -285,11 +239,8 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                     isDense: true,
                     hintText: 'ค้นหา topupId / userId / name',
                     hintStyle: const TextStyle(color: Colors.white54),
-                    prefixIcon: const Icon(
-                      Icons.search,
-                      color: Colors.white54,
-                      size: 18,
-                    ),
+                    prefixIcon:
+                        const Icon(Icons.search, color: Colors.white54, size: 18),
                     enabledBorder: OutlineInputBorder(
                       borderSide: const BorderSide(color: Colors.white24),
                       borderRadius: BorderRadius.circular(8),
@@ -298,10 +249,8 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                       borderSide: const BorderSide(color: Colors.white54),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 10,
-                    ),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                   ),
                   onChanged: (v) => setState(() => _search = v),
                 ),
@@ -313,15 +262,10 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                   dropdownColor: Colors.grey[900],
                   style: const TextStyle(color: Colors.white),
                   items: _statusOptions
-                      .map(
-                        (s) => DropdownMenuItem(
-                          value: s,
-                          child: Text(
-                            s,
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      )
+                      .map((s) => DropdownMenuItem(
+                            value: s,
+                            child: Text(s, style: const TextStyle(color: Colors.white)),
+                          ))
                       .toList(),
                   onChanged: (v) async {
                     setState(() => _selectedStatus = v ?? 'ทั้งหมด');
@@ -338,15 +282,11 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = _auth.currentUser;
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         foregroundColor: Colors.white,
-        title: const Text(
-          'Admin • Topups',
-          style: TextStyle(color: Colors.white),
-        ),
+        title: const Text('Admin • Topups', style: TextStyle(color: Colors.white)),
         backgroundColor: Colors.black,
       ),
       body: Column(
@@ -377,7 +317,7 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
 
   Widget _buildList() {
     final items = _filtered();
-    if (items.isEmpty) {
+    if (items.isEmpty && !_isLoadingMore) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24.0),
@@ -391,17 +331,16 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
       itemCount: items.length,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
-        final doc = items[i];
-        final data = doc.data();
-        final topupId = (data['topupId'] ?? doc.id) as String;
-        final uid = (data['userId'] ?? '-') as String;
-        final name = (data['userName'] ?? '-') as String;
-        final status = (data['status'] ?? '-') as String;
-        final label = (data['packageLabel'] ?? '-') as String;
-        final priceText = (data['priceText'] ?? '-') as String;
-        final amount = (data['amount'] ?? 0).toDouble();
-        final method = (data['paymentMethod'] ?? '-') as String;
-        final createdAt = data['createdAt'] as Timestamp?;
+        final data = items[i];
+        final topupId = (data['topupId'] ?? data['id'] ?? '-').toString();
+        final uid = (data['userId'] ?? '-').toString();
+        final name = (data['userName'] ?? '-').toString();
+        final status = (data['status'] ?? '-').toString();
+        final label = (data['packageLabel'] ?? '-').toString();
+        final priceText = (data['priceText'] ?? '-').toString();
+        final amount = ((data['amount'] ?? 0) as num).toDouble();
+        final method = (data['paymentMethod'] ?? '-').toString();
+        final createdAt = data['createdAt'] as String?;
         final slip = (data['slip'] as Map?)?.cast<String, dynamic>();
 
         return Container(
@@ -414,7 +353,6 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
             padding: const EdgeInsets.all(12.0),
             child: Column(
               children: [
-                // แถวบน: ID / ผู้ใช้ / สถานะ
                 Row(
                   children: [
                     Expanded(
@@ -422,67 +360,45 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                         spacing: 8,
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          const Icon(
-                            Icons.receipt_long,
-                            size: 18,
-                            color: Colors.white70,
-                          ),
+                          const Icon(Icons.receipt_long, size: 18, color: Colors.white70),
                           GestureDetector(
                             onLongPress: () => _copy(topupId),
-                            child: Text(
-                              '#$topupId',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                            child: Text('#$topupId',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white, fontWeight: FontWeight.w600)),
                           ),
                           const SizedBox(width: 12),
-                          const Icon(
-                            Icons.person,
-                            size: 18,
-                            color: Colors.white54,
-                          ),
+                          const Icon(Icons.person, size: 18, color: Colors.white54),
                           GestureDetector(
                             onLongPress: () => _copy(uid),
-                            child: Text(
-                              '$name ($uid)',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white70),
-                            ),
+                            child: Text('$name ($uid)',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white70)),
                           ),
                         ],
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
                         color: _statusColor(status).withOpacity(0.15),
-                        border: Border.all(
-                          color: _statusColor(status).withOpacity(0.35),
-                        ),
+                        border:
+                            Border.all(color: _statusColor(status).withOpacity(0.35)),
                         borderRadius: BorderRadius.circular(999),
                       ),
-                      child: Text(
-                        status,
-                        style: TextStyle(
-                          color: _statusColor(status),
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12,
-                        ),
-                      ),
+                      child: Text(status,
+                          style: TextStyle(
+                              color: _statusColor(status),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12)),
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
-
-                // รายละเอียด
                 Row(
                   children: [
                     Expanded(
@@ -502,100 +418,49 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        const Text(
-                          'ยอดชำระ',
-                          style: TextStyle(color: Colors.white60),
-                        ),
-                        Text(
-                          '฿${amount.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        const Text('ยอดชำระ', style: TextStyle(color: Colors.white60)),
+                        Text('฿${amount.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
-
-                // ปุ่มการกระทำ (แถวบน: ดูสลิป + อนุมัติ/ปฏิเสธ)
                 Row(
                   children: [
                     TextButton.icon(
                       onPressed: () => _showSlip(slip),
                       icon: const Icon(Icons.image, color: Colors.white70),
-                      label: const Text(
-                        'ดูสลิป',
-                        style: TextStyle(color: Colors.white),
-                      ),
+                      label: const Text('ดูสลิป', style: TextStyle(color: Colors.white)),
                     ),
                     const Spacer(),
                     if (status != 'paid' && status != 'rejected')
                       ElevatedButton.icon(
                         onPressed: () =>
                             _confirmAndUpdate('อนุมัติ', 'paid', topupId, uid),
-                        icon: const Icon(
-                          Icons.check_circle,
-                          color: Colors.white,
-                        ),
-                        label: const Text(
-                          'อนุมัติ',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                        ),
+                        icon: const Icon(Icons.check_circle, color: Colors.white),
+                        label:
+                            const Text('อนุมัติ', style: TextStyle(color: Colors.white)),
+                        style:
+                            ElevatedButton.styleFrom(backgroundColor: Colors.green),
                       ),
                     const SizedBox(width: 8),
                     if (status != 'rejected' && status != 'paid')
                       ElevatedButton.icon(
-                        onPressed: () => _confirmAndUpdate(
-                          'ปฏิเสธ',
-                          'rejected',
-                          topupId,
-                          uid,
-                        ),
+                        onPressed: () =>
+                            _confirmAndUpdate('ปฏิเสธ', 'rejected', topupId, uid),
                         icon: const Icon(Icons.cancel, color: Colors.white),
-                        label: const Text(
-                          'ปฏิเสธ',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.redAccent,
-                        ),
+                        label:
+                            const Text('ปฏิเสธ', style: TextStyle(color: Colors.white)),
+                        style:
+                            ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
                       ),
                   ],
                 ),
-
                 const SizedBox(height: 10),
-
-                // แถวล่าง: ปุ่มหมดอายุ (อยู่คนละแถวชัดเจน)
-                // SizedBox(
-                //   width: double.infinity,
-                //   child: status != 'expired'
-                //       ? OutlinedButton.icon(
-                //           onPressed: () => _confirmAndUpdate(
-                //             'หมดอายุ',
-                //             'expired',
-                //             topupId,
-                //             uid,
-                //           ),
-                //           icon: const Icon(
-                //             Icons.timer_off,
-                //             color: Colors.white70,
-                //           ),
-                //           label: const Text(
-                //             'หมดอายุ',
-                //             style: TextStyle(color: Colors.white),
-                //           ),
-                //           style: OutlinedButton.styleFrom(
-                //             side: const BorderSide(color: Colors.white24),
-                //           ),
-                //         )
-                //       : const SizedBox.shrink(),
-                // ),
               ],
             ),
           ),
@@ -610,12 +475,9 @@ class _AdminTopupScreenState extends State<AdminTopupScreen> {
       child: Row(
         children: [
           SizedBox(
-            width: 70,
-            child: Text(k, style: const TextStyle(color: Colors.white60)),
-          ),
-          Expanded(
-            child: Text(v, style: const TextStyle(color: Colors.white)),
-          ),
+              width: 70,
+              child: Text(k, style: const TextStyle(color: Colors.white60))),
+          Expanded(child: Text(v, style: const TextStyle(color: Colors.white))),
         ],
       ),
     );

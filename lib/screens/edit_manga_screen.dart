@@ -1,12 +1,11 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'dart:io';
+import 'package:Twebtoon/services/api_service.dart';
 
 class EditMangaScreen extends StatefulWidget {
-  final String mangaId;
+  final int mangaId;
   final String? initialName;
   final String? initialCover;
   final String? initialBackground;
@@ -30,8 +29,10 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
   final _backgroundController = TextEditingController();
 
   bool _isLoading = false;
-  File? _coverImageFile;
-  File? _backgroundImageFile;
+  Uint8List? _coverBytes;
+  Uint8List? _backgroundBytes;
+  String? _coverPickedName;
+  String? _bgPickedName;
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -50,57 +51,43 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
     super.dispose();
   }
 
-  void _openImageFullScreen({
-  File? file,
-  String? url,
-  required String heroTag,
-}) {
-  if (file == null && (url == null || url.isEmpty)) return;
+  void _openImageFullScreen({Uint8List? bytes, String? url, required String heroTag}) {
+    if (bytes == null && (url == null || url.isEmpty)) return;
 
-  final ImageProvider provider =
-      file != null ? FileImage(file) : NetworkImage(url!) as ImageProvider;
+    final ImageProvider provider =
+        bytes != null ? MemoryImage(bytes) : NetworkImage(url!) as ImageProvider;
 
-  showDialog(
-    context: context,
-    barrierColor: Colors.black.withOpacity(0.9),
-    barrierDismissible: true,
-    builder: (_) {
-      return GestureDetector(
-        onTap: () => Navigator.of(context).pop(),
-        child: Stack(
-          children: [
-            Center(
-              child: Hero(
-                tag: heroTag,
-                child: InteractiveViewer(
-                  minScale: 0.5,
-                  maxScale: 4.0,
-                  child: Image(
-                    image: provider,
-                    fit: BoxFit.contain,
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.9),
+      barrierDismissible: true,
+      builder: (_) {
+        return GestureDetector(
+          onTap: () => Navigator.of(context).pop(),
+          child: Stack(
+            children: [
+              Center(
+                child: Hero(
+                  tag: heroTag,
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 4.0,
+                    child: Image(image: provider, fit: BoxFit.contain),
                   ),
                 ),
               ),
-            ),
-            // ปุ่มปิดมุมบน
-            Positioned(
-              top: 24,
-              right: 24,
-              child: Icon(
-                Icons.close,
-                color: Colors.white70,
-                size: 28,
+              const Positioned(
+                top: 24,
+                right: 24,
+                child: Icon(Icons.close, color: Colors.white70, size: 28),
               ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
+            ],
+          ),
+        );
+      },
+    );
+  }
 
-
-  // เลือกรูปภาพจาก Gallery
   Future<void> _pickImage(bool isCover) async {
     try {
       final XFile? image = await _picker.pickImage(
@@ -109,13 +96,15 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
         maxHeight: 1024,
         imageQuality: 85,
       );
-
       if (image != null) {
+        final bytes = await image.readAsBytes();
         setState(() {
           if (isCover) {
-            _coverImageFile = File(image.path);
+            _coverBytes = bytes;
+            _coverPickedName = image.name;
           } else {
-            _backgroundImageFile = File(image.path);
+            _backgroundBytes = bytes;
+            _bgPickedName = image.name;
           }
         });
       }
@@ -124,82 +113,69 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
     }
   }
 
-  // อัปโหลดรูปภาพไป Firebase Storage
-  Future<String?> _uploadImage(File imageFile, String type) async {
+  Future<String?> _uploadImage(Uint8List bytes, String filename, String purpose) async {
     try {
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('manga_images')
-          .child('${widget.mangaId}_$type.jpg');
-
-      final uploadTask = storageRef.putFile(imageFile);
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
-
-      return downloadUrl;
+      final response = await ApiService.uploadBytes(
+        bytes: bytes,
+        filename: filename,
+        purpose: purpose,
+      );
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        return json['url'] as String?;
+      }
+      _showSnackBar('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ (${response.statusCode})');
+      return null;
     } catch (e) {
       _showSnackBar('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ: $e');
       return null;
     }
   }
 
-  // บันทึกข้อมูลไป Firebase Realtime Database
   Future<void> _saveManga() async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() => _isLoading = true);
 
     try {
       String coverUrl = _coverController.text;
       String backgroundUrl = _backgroundController.text;
 
-      // อัปโหลดรูป Cover ถ้ามีการเลือกใหม่
-      if (_coverImageFile != null) {
-        final uploadedCoverUrl = await _uploadImage(_coverImageFile!, 'cover');
-        if (uploadedCoverUrl != null) {
-          coverUrl = uploadedCoverUrl;
-        }
+      if (_coverBytes != null && _coverPickedName != null) {
+        final uploadedUrl = await _uploadImage(_coverBytes!, _coverPickedName!, 'manga_cover');
+        if (uploadedUrl != null) coverUrl = uploadedUrl;
       }
 
-      // อัปโหลดรูป Background ถ้ามีการเลือกใหม่
-      if (_backgroundImageFile != null) {
-        final uploadedBgUrl = await _uploadImage(_backgroundImageFile!, 'background');
-        if (uploadedBgUrl != null) {
-          backgroundUrl = uploadedBgUrl;
-        }
+      if (_backgroundBytes != null && _bgPickedName != null) {
+        final uploadedUrl = await _uploadImage(_backgroundBytes!, _bgPickedName!, 'manga_background');
+        if (uploadedUrl != null) backgroundUrl = uploadedUrl;
       }
 
-      // อัปเดทข้อมูลใน Firebase Realtime Database
-      final ref = FirebaseDatabase.instance.ref('mangas/${widget.mangaId}');
+      final response = await ApiService.patch(
+        '/api/v1/mangas/${widget.mangaId}',
+        {
+          'name': _nameController.text.trim(),
+          'coverUrl': coverUrl,
+          'backgroundUrl': backgroundUrl,
+        },
+      );
 
-      await ref.update({
-        'name': _nameController.text.trim(),
-        'cover': coverUrl,
-        'background': backgroundUrl,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-      });
-
-      _showSnackBar('บันทึกข้อมูลสำเร็จ');
-      
-      // กลับไปหน้าก่อนหน้า
-      if (mounted) {
-        Navigator.of(context).pop(true); // ส่ง true เพื่อบอกว่าได้อัปเดทแล้ว
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        _showSnackBar('บันทึกข้อมูลสำเร็จ');
+        Navigator.of(context).pop(true);
+      } else {
+        _showSnackBar('บันทึกไม่สำเร็จ (${response.statusCode})');
       }
-
     } catch (e) {
       _showSnackBar('เกิดข้อผิดพลาดในการบันทึก: $e');
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   void _showSnackBar(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -216,21 +192,16 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
             const Padding(
               padding: EdgeInsets.all(16.0),
               child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  color: Colors.white,
-                  strokeWidth: 2,
-                ),
-              ),
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2)),
             )
           else
             TextButton(
               onPressed: _saveManga,
-              child: const Text(
-                'บันทึก',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
+              child: const Text('บันทึก',
+                  style: TextStyle(color: Colors.white, fontSize: 16)),
             ),
         ],
       ),
@@ -241,15 +212,11 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ชื่อมังงะ
-              const Text(
-                'ชื่อมังงะ',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              const Text('ชื่อมังงะ',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _nameController,
@@ -260,103 +227,64 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
                   filled: true,
                   fillColor: Colors.grey[800],
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'กรุณาใส่ชื่อมังงะ';
-                  }
+                  if (value == null || value.trim().isEmpty) return 'กรุณาใส่ชื่อมังงะ';
                   return null;
                 },
               ),
-
               const SizedBox(height: 24),
 
-              // รูปปก (Cover)
-              const Text(
-                'รูปปก',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              // รูปปก
+              const Text('รูปปก',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              
-              // แสดงรูปปกปัจจุบัน
               Container(
                 height: 200,
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: Colors.grey[800],
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: _coverImageFile != null
-    ? InkWell(
-        onTap: () => _openImageFullScreen(
-          file: _coverImageFile,
-          heroTag: 'cover-hero',
-        ),
-        child: Hero(
-          tag: 'cover-hero',
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.file(
-              _coverImageFile!,
-              fit: BoxFit.cover,
-            ),
-          ),
-        ),
-      )
-    : _coverController.text.isNotEmpty
-        ? InkWell(
-            onTap: () => _openImageFullScreen(
-              url: _coverController.text,
-              heroTag: 'cover-hero',
-            ),
-            child: Hero(
-              tag: 'cover-hero',
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  _coverController.text,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return const Center(
-                      child: CircularProgressIndicator(color: Colors.white),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Center(
-                      child: Icon(
-                        Icons.image_not_supported,
-                        color: Colors.white60,
-                        size: 48,
-                      ),
-                    );
-                  },
-                ),
+                    color: Colors.grey[800],
+                    borderRadius: BorderRadius.circular(8)),
+                child: _coverBytes != null
+                    ? InkWell(
+                        onTap: () => _openImageFullScreen(
+                            bytes: _coverBytes, heroTag: 'cover-hero'),
+                        child: Hero(
+                          tag: 'cover-hero',
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.memory(_coverBytes!, fit: BoxFit.cover),
+                          ),
+                        ),
+                      )
+                    : _coverController.text.isNotEmpty
+                        ? InkWell(
+                            onTap: () => _openImageFullScreen(
+                                url: _coverController.text, heroTag: 'cover-hero'),
+                            child: Hero(
+                              tag: 'cover-hero',
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(_coverController.text,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => const Center(
+                                        child: Icon(Icons.image_not_supported,
+                                            color: Colors.white60, size: 48))),
+                              ),
+                            ),
+                          )
+                        : const Center(
+                            child:
+                                Icon(Icons.image, color: Colors.white60, size: 48)),
               ),
-            ),
-          )
-        : const Center(
-            child: Icon(
-              Icons.image,
-              color: Colors.white60,
-              size: 48,
-            ),
-          ),
-              ),
-              
               const SizedBox(height: 8),
-              
               Row(
                 children: [
                   Expanded(
@@ -369,13 +297,10 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
                         filled: true,
                         fillColor: Colors.grey[800],
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide.none,
-                        ),
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide.none),
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
+                            horizontal: 16, vertical: 12),
                       ),
                     ),
                   ),
@@ -385,94 +310,60 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
                     icon: const Icon(Icons.photo_library),
                     label: const Text('เลือกรูป'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[600],
-                      foregroundColor: Colors.white,
-                    ),
+                        backgroundColor: Colors.blue[600],
+                        foregroundColor: Colors.white),
                   ),
                 ],
               ),
-
               const SizedBox(height: 24),
 
-              // รูปพื้นหลัง (Background)
-              const Text(
-                'รูปพื้นหลัง',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              // รูปพื้นหลัง
+              const Text('รูปพื้นหลัง',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              
-              // แสดงรูปพื้นหลังปัจจุบัน
               Container(
                 height: 200,
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: Colors.grey[800],
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: _backgroundImageFile != null
-    ? InkWell(
-        onTap: () => _openImageFullScreen(
-          file: _backgroundImageFile,
-          heroTag: 'bg-hero',
-        ),
-        child: Hero(
-          tag: 'bg-hero',
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.file(
-              _backgroundImageFile!,
-              fit: BoxFit.cover,
-            ),
-          ),
-        ),
-      )
-    : _backgroundController.text.isNotEmpty
-        ? InkWell(
-            onTap: () => _openImageFullScreen(
-              url: _backgroundController.text,
-              heroTag: 'bg-hero',
-            ),
-            child: Hero(
-              tag: 'bg-hero',
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  _backgroundController.text,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return const Center(
-                      child: CircularProgressIndicator(color: Colors.white),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Center(
-                      child: Icon(
-                        Icons.image_not_supported,
-                        color: Colors.white60,
-                        size: 48,
-                      ),
-                    );
-                  },
-                ),
+                    color: Colors.grey[800],
+                    borderRadius: BorderRadius.circular(8)),
+                child: _backgroundBytes != null
+                    ? InkWell(
+                        onTap: () => _openImageFullScreen(
+                            bytes: _backgroundBytes, heroTag: 'bg-hero'),
+                        child: Hero(
+                          tag: 'bg-hero',
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child:
+                                Image.memory(_backgroundBytes!, fit: BoxFit.cover),
+                          ),
+                        ),
+                      )
+                    : _backgroundController.text.isNotEmpty
+                        ? InkWell(
+                            onTap: () => _openImageFullScreen(
+                                url: _backgroundController.text, heroTag: 'bg-hero'),
+                            child: Hero(
+                              tag: 'bg-hero',
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(_backgroundController.text,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => const Center(
+                                        child: Icon(Icons.image_not_supported,
+                                            color: Colors.white60, size: 48))),
+                              ),
+                            ),
+                          )
+                        : const Center(
+                            child: Icon(Icons.wallpaper,
+                                color: Colors.white60, size: 48)),
               ),
-            ),
-          )
-        : const Center(
-            child: Icon(
-              Icons.wallpaper,
-              color: Colors.white60,
-              size: 48,
-            ),
-          ),
-              ),
-              
               const SizedBox(height: 8),
-              
               Row(
                 children: [
                   Expanded(
@@ -485,13 +376,10 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
                         filled: true,
                         fillColor: Colors.grey[800],
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide.none,
-                        ),
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide.none),
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
+                            horizontal: 16, vertical: 12),
                       ),
                     ),
                   ),
@@ -501,16 +389,13 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
                     icon: const Icon(Icons.photo_library),
                     label: const Text('เลือกรูป'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[600],
-                      foregroundColor: Colors.white,
-                    ),
+                        backgroundColor: Colors.green[600],
+                        foregroundColor: Colors.white),
                   ),
                 ],
               ),
-
               const SizedBox(height: 32),
 
-              // ปุ่มบันทึก
               SizedBox(
                 width: double.infinity,
                 height: 50,
@@ -520,25 +405,19 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
                     backgroundColor: Colors.orange[600],
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+                        borderRadius: BorderRadius.circular(8)),
                   ),
                   child: _isLoading
                       ? const SizedBox(
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Text(
-                          'บันทึกการเปลี่ยนแปลง',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
+                              color: Colors.white, strokeWidth: 2))
+                      : const Text('บันทึกการเปลี่ยนแปลง',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
               ),
-
               const SizedBox(height: 16),
             ],
           ),

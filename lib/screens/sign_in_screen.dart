@@ -5,6 +5,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:Twebtoon/screens/home2_screen.dart';
 import 'package:Twebtoon/screens/sign_up_screen.dart';
 import 'package:simple_icons/simple_icons.dart';
+import 'package:Twebtoon/services/auth_service.dart';
 // import 'package:Twebtoon/screens/onboarding_screen.dart';
 import 'welcome_screen.dart'; // ใช้ AbstractBackground + shared atoms
 
@@ -33,6 +34,7 @@ class _SignInScreenState extends State<SignInScreen> {
         final userCredential = await FirebaseAuth.instance.signInWithPopup(
           googleProvider,
         );
+        await AuthService.exchangeToken(userCredential.user!);
 
         if (mounted) {
           Navigator.of(context).pushReplacement(
@@ -43,14 +45,10 @@ class _SignInScreenState extends State<SignInScreen> {
       }
 
       // --- Android/iOS ใช้ google_sign_in ---
-      final GoogleSignIn googleSignIn = GoogleSignIn(
-        // ถ้าต้องการจำกัด scope เพิ่มเติม:
-        // scopes: ['email', 'https://www.googleapis.com/auth/userinfo.profile'],
-      );
+      final GoogleSignIn googleSignIn = GoogleSignIn();
 
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
-        // ผู้ใช้กดยกเลิก
         return;
       }
 
@@ -64,6 +62,7 @@ class _SignInScreenState extends State<SignInScreen> {
       final userCredential = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
+      await AuthService.exchangeToken(userCredential.user!);
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -135,7 +134,7 @@ class _SignInScreenState extends State<SignInScreen> {
         email: _email.text.trim(),
         password: _password.text.trim(),
       );
-      // เข้าสู่ระบบสำเร็จ ไปหน้า Onboarding
+      await AuthService.exchangeToken(credential.user!);
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const Home2Screen()),

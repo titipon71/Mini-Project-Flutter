@@ -1,0 +1,51 @@
+========================================
+  TWEBTOON - RUN COMMANDS
+========================================
+
+--- Terminal 1: FastAPI Backend ---
+cd C:\ECT\my_app\backend
+uvicorn app.main:app --reload --port 8000
+
+API Docs: http://localhost:8000/docs
+
+
+--- Terminal 2: Flutter Web ---
+cd C:\ECT\my_app
+flutter run -d chrome --web-port 7357
+
+
+========================================
+  REQUIREMENTS BEFORE RUNNING
+========================================
+
+1. MySQL must be running
+2. backend/.env must exist with correct DATABASE_URL
+3. backend/firebase-credentials.json must exist
+
+
+--- backend/.env example ---
+DATABASE_URL=mysql+aiomysql://root:password@localhost:3306/twebtoon
+FIREBASE_CREDENTIALS_PATH=./firebase-credentials.json
+JWT_SECRET_KEY=your-strong-random-secret-here
+
+
+========================================
+  FLUTTER - OTHER PLATFORMS
+========================================
+
+Android emulator:
+  - Change baseUrl in lib/services/api_service.dart
+    from: http://localhost:8000
+    to:   http://10.0.2.2:8000
+  - flutter run -d emulator-5554
+
+Windows desktop:
+  - flutter run -d windows
+
+
+========================================
+  DATABASE MIGRATION (first time only)
+========================================
+
+cd C:\ECT\my_app\backend
+alembic upgrade head

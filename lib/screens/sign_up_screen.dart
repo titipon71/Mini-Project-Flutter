@@ -4,6 +4,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:Twebtoon/screens/home2_screen.dart';
 import 'package:Twebtoon/screens/sign_in_screen.dart';
 import 'package:simple_icons/simple_icons.dart';
+import 'package:Twebtoon/services/auth_service.dart';
 import 'welcome_screen.dart'; // ใช้ AbstractBackground + shared atoms
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -35,6 +36,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         final userCredential = await FirebaseAuth.instance.signInWithPopup(
           googleProvider,
         );
+        await AuthService.exchangeToken(userCredential.user!);
 
         if (mounted) {
           Navigator.of(context).pushReplacement(
@@ -45,14 +47,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
       }
 
       // --- Android/iOS ใช้ google_sign_in ---
-      final GoogleSignIn googleSignIn = GoogleSignIn(
-        // ถ้าต้องการจำกัด scope เพิ่มเติม:
-        // scopes: ['email', 'https://www.googleapis.com/auth/userinfo.profile'],
-      );
+      final GoogleSignIn googleSignIn = GoogleSignIn();
 
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
-        // ผู้ใช้กดยกเลิก
         return;
       }
 
@@ -66,6 +64,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       final userCredential = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
+      await AuthService.exchangeToken(userCredential.user!);
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -100,6 +99,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         final userCredential = await FirebaseAuth.instance.signInWithPopup(
           githubProvider,
         );
+        await AuthService.exchangeToken(userCredential.user!);
 
         if (mounted) {
           Navigator.of(context).pushReplacement(
@@ -137,10 +137,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
         email: _email.text.trim(),
         password: _password.text.trim(),
       );
-      // อัปเดตชื่อผู้ใช้ (display name)
       await credential.user?.updateDisplayName(_name.text.trim());
+      await AuthService.exchangeToken(credential.user!);
 
-      // ไปหน้า onboarding
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const Home2Screen()),

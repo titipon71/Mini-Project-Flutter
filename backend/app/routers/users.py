@@ -6,7 +6,10 @@ from datetime import datetime, timedelta
 
 from app.deps import get_db, get_current_user, require_admin
 from app.models.user import User
-from app.schemas.user import UserProfileOut, RolesOut, UserListResponse, SetRoleRequest, SetRoleResponse
+from app.schemas.user import (
+    UserProfileOut, RolesOut, UserListResponse, SetRoleRequest, SetRoleResponse,
+    AdminUserOut, AdminUserListResponse, UpdateProfileRequest, UpdateProfileResponse,
+)
 
 router = APIRouter(tags=["users"])
 
@@ -21,6 +24,23 @@ def _to_profile(user: User) -> UserProfileOut:
     )
 
 
+def _to_admin_user(user: User) -> AdminUserOut:
+    role = "user"
+    if user.is_admin:
+        role = "admin"
+    elif user.is_vip:
+        role = "vip"
+    return AdminUserOut(
+        uid=user.uid,
+        email=user.email,
+        displayName=user.display_name,
+        photoURL=user.photo_url,
+        role=role,
+        vipUntil=user.vip_until,
+        createdAt=user.created_at,
+    )
+
+
 @router.get("/api/v1/me", response_model=UserProfileOut)
 async def get_me(user: Annotated[User, Depends(get_current_user)]):
     return _to_profile(user)
@@ -29,6 +49,19 @@ async def get_me(user: Annotated[User, Depends(get_current_user)]):
 @router.get("/api/v1/me/roles", response_model=RolesOut)
 async def get_my_roles(user: Annotated[User, Depends(get_current_user)]):
     return RolesOut(admin=user.is_admin, vip=user.is_vip, vipUntil=user.vip_until)
+
+
+@router.patch("/api/v1/me/profile", response_model=UpdateProfileResponse)
+async def update_my_profile(
+    body: UpdateProfileRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if body.displayName is not None:
+        user.display_name = body.displayName.strip() or user.display_name
+    user.updated_at = datetime.utcnow()
+    await db.commit()
+    return UpdateProfileResponse(ok=True, displayName=user.display_name)
 
 
 @router.get("/api/v1/users/{uid}", response_model=UserProfileOut)
@@ -40,25 +73,20 @@ async def get_user(uid: str, db: Annotated[AsyncSession, Depends(get_db)], _: An
     return _to_profile(user)
 
 
-@router.get("/api/v1/admin/users", response_model=UserListResponse)
+@router.get("/api/v1/admin/users", response_model=AdminUserListResponse)
 async def list_users(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_admin)],
     search: str | None = None,
-    limit: int = 50,
-    cursor: str | None = None,
+    limit: int = 500,
 ):
     q = select(User).order_by(User.created_at.desc())
     if search:
         q = q.where(or_(User.email.ilike(f"%{search}%"), User.display_name.ilike(f"%{search}%")))
-    if cursor:
-        q = q.where(User.uid > cursor)
     q = q.limit(limit)
     result = await db.execute(q)
     users = result.scalars().all()
-    items = [_to_profile(u) for u in users]
-    next_cursor = users[-1].uid if len(users) == limit else None
-    return UserListResponse(items=items, nextCursor=next_cursor)
+    return AdminUserListResponse(users=[_to_admin_user(u) for u in users])
 
 
 @router.patch("/api/v1/admin/users/{uid}/roles", response_model=SetRoleResponse)

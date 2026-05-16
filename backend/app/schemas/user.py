@@ -34,3 +34,27 @@ class SetRoleResponse(BaseModel):
     uid: str
     role: str
     vipUntil: datetime | None = None
+
+
+# Flat format expected by Flutter admin screens
+class AdminUserOut(BaseModel):
+    uid: str
+    email: str | None
+    displayName: str | None
+    photoURL: str | None
+    role: str  # "user" | "vip" | "admin"
+    vipUntil: datetime | None = None
+    createdAt: datetime | None = None
+
+
+class AdminUserListResponse(BaseModel):
+    users: list[AdminUserOut]
+
+
+class UpdateProfileRequest(BaseModel):
+    displayName: str | None = None
+
+
+class UpdateProfileResponse(BaseModel):
+    ok: bool
+    displayName: str | None

@@ -1,17 +1,27 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
+import 'api_service.dart';
 
-/// คืนค่า stream ที่แจ้งสถานะ VIP แบบ realtime
-Stream<bool> vipStream(String uid) {
-  return FirebaseFirestore.instance
-      .collection('users')
-      .doc(uid)
-      .snapshots()
-      .map((s) => (s.data()?['roles']?['vip'] ?? false) as bool);
+/// ดึงสถานะ VIP จาก backend (ครั้งเดียว)
+Future<bool> isVip() async {
+  try {
+    final response = await ApiService.get('/api/v1/me/roles');
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final vip = json['vip'] == true;
+      final vipUntil = json['vipUntil'] as String?;
+      if (!vip) return false;
+      if (vipUntil == null) return true;
+      return DateTime.tryParse(vipUntil)?.isAfter(DateTime.now()) ?? false;
+    }
+  } catch (_) {}
+  return false;
 }
 
-/// คืนค่า VIP แบบครั้งเดียว (future)
-Future<bool> isVip(String uid) async {
-  final snap =
-      await FirebaseFirestore.instance.collection('users').doc(uid).get();
-  return (snap.data()?['roles']?['vip'] ?? false) as bool;
+/// Stream ที่ poll สถานะ VIP ทุก 30 วินาที
+/// ใช้แทน Firestore realtime listener
+Stream<bool> vipStream() async* {
+  while (true) {
+    yield await isVip();
+    await Future.delayed(const Duration(seconds: 30));
+  }
 }

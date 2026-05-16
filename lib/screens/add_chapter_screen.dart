@@ -1,17 +1,16 @@
+import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:Twebtoon/services/api_service.dart';
 
 class AddChapterScreen extends StatefulWidget {
-  final int mangaIndex;
+  final int mangaId;
   final String mangaName;
 
   const AddChapterScreen({
     super.key,
-    required this.mangaIndex,
+    required this.mangaId,
     required this.mangaName,
   });
 
@@ -24,7 +23,7 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
   final _titleController = TextEditingController();
   final _numberController = TextEditingController();
   final List<TextEditingController> _pageControllers = [];
-  final List<XFile?> _selectedImages = []; // เก็บรูปภาพที่เลือก
+  final List<XFile?> _selectedImages = [];
   final ImagePicker _picker = ImagePicker();
 
   bool isLoading = false;
@@ -33,14 +32,13 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
   @override
   void initState() {
     super.initState();
-    // เริ่มต้นด้วยหน้าแรก
     _addPageField();
   }
 
   void _addPageField() {
     setState(() {
       _pageControllers.add(TextEditingController());
-      _selectedImages.add(null); // เพิ่ม null สำหรับรูปภาพใหม่
+      _selectedImages.add(null);
     });
   }
 
@@ -48,11 +46,10 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
     setState(() {
       _pageControllers[index].dispose();
       _pageControllers.removeAt(index);
-      _selectedImages.removeAt(index); // ลบรูปภาพที่สอดคล้องกัน
+      _selectedImages.removeAt(index);
     });
   }
 
-  // เลือกรูปภาพจาก Gallery
   Future<void> _pickImage(int index) async {
     final XFile? image = await _picker.pickImage(
       source: ImageSource.gallery,
@@ -61,9 +58,7 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
       imageQuality: 85,
     );
     if (image != null) {
-      setState(() {
-        _selectedImages[index] = image; // ไม่ต้องแปลงเป็น File
-      });
+      setState(() => _selectedImages[index] = image);
     }
   }
 
@@ -75,72 +70,30 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
     );
     if (images.isNotEmpty) {
       setState(() {
-        for (var c in _pageControllers) {
-          c.dispose();
-        }
+        for (var c in _pageControllers) { c.dispose(); }
         _pageControllers
           ..clear()
-          ..addAll(
-            List.generate(images.length, (_) => TextEditingController()),
-          );
+          ..addAll(List.generate(images.length, (_) => TextEditingController()));
         _selectedImages
           ..clear()
-          ..addAll(images); // เก็บเป็น XFile ตรง ๆ
+          ..addAll(images);
       });
     }
   }
 
-  // อัปโหลดรูปภาพไป Firebase Storage
-  Future<String?> _uploadImage(XFile imageFile, int pageIndex, int chapterIndex) async {
+  Future<String?> _uploadImage(XFile imageFile, int pageIndex) async {
     try {
-      // ดึงชื่อไฟล์เดิมและนามสกุลไฟล์
-      final originalFileName = imageFile.name;
-      final fileExtension = originalFileName.split('.').last.toLowerCase();
-      
-      // สร้างชื่อไฟล์ใหม่ที่รวมชื่อเดิม: page_{pageIndex}_{originalFileName}
-      final newFileName = 'page_${pageIndex + 1}_$originalFileName';
-      
-      // Path: mangas/{mangaIndex}/chapters/{chapterIndex}/{newFileName}
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('mangas')
-          .child('${widget.mangaIndex}') // index จริงของ manga ใน DB
-          .child('chapters')
-          .child('$chapterIndex') // index จริงของ chapter ใน DB
-          .child(newFileName);
-
       final bytes = await imageFile.readAsBytes();
-      
-      // กำหนด content type ตามนามสกุลไฟล์
-      String contentType = 'image/jpeg'; // default
-      switch (fileExtension) {
-        case 'png':
-          contentType = 'image/png';
-          break;
-        case 'jpg':
-        case 'jpeg':
-          contentType = 'image/jpeg';
-          break;
-        case 'gif':
-          contentType = 'image/gif';
-          break;
-        case 'webp':
-          contentType = 'image/webp';
-          break;
-      }
-      
-      final metadata = SettableMetadata(
-        contentType: contentType,
-        customMetadata: {
-          'originalFileName': originalFileName,
-          'pageIndex': '${pageIndex + 1}',
-          'uploadedAt': DateTime.now().toIso8601String(),
-        },
+      final response = await ApiService.uploadBytes(
+        bytes: bytes,
+        filename: imageFile.name,
+        purpose: 'chapter_page',
       );
-
-      final task = await storageRef.putData(bytes, metadata);
-      final downloadUrl = await task.ref.getDownloadURL();
-      return downloadUrl;
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        return json['url'] as String?;
+      }
+      return null;
     } catch (e) {
       debugPrint('Error uploading image: $e');
       return null;
@@ -148,10 +101,8 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
   }
 
   Future<void> _showPickedImageDialog(XFile xfile) async {
-    // อ่าน bytes แล้วแสดงด้วย Image.memory (ใช้ได้ทั้ง Mobile/Web)
     final Uint8List bytes = await xfile.readAsBytes();
     if (!mounted) return;
-
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -160,7 +111,6 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
         insetPadding: const EdgeInsets.all(16),
         child: Stack(
           children: [
-            // ซูม/แพนได้
             InteractiveViewer(child: Image.memory(bytes, fit: BoxFit.contain)),
             Positioned(
               right: 8,
@@ -204,44 +154,26 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
 
   Future<void> addChapter() async {
     if (!_formKey.currentState!.validate()) return;
-
-    setState(() {
-      isLoading = true;
-      isUploading = true;
-    });
+    setState(() { isLoading = true; isUploading = true; });
 
     try {
-      final databaseRef = FirebaseDatabase.instance.ref('mangas/${widget.mangaIndex}/chapters');
-
-      // หา chapter index ถัดไป
-      final snapshot = await databaseRef.get();
-      int nextChapterIndex = 1;
-
-      if (snapshot.exists && snapshot.value is List) {
-        List existingChapters = snapshot.value as List;
-        nextChapterIndex = existingChapters.length;
-      }
-
-      // สร้าง pages array และอัปโหลดรูปภาพ
-      List<Map<String, dynamic>> pages = [];
+      final List<Map<String, dynamic>> pages = [];
 
       for (int i = 0; i < _pageControllers.length; i++) {
         String pageUrl = '';
 
-        // ถ้ามีรูปภาพที่เลือก ให้อัปโหลดก่อน
         if (_selectedImages[i] != null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('กำลังอัปโหลดรูปหน้าที่ ${i + 1}...')),
-          );
-
-          final uploadedUrl = await _uploadImage(_selectedImages[i]!, i, nextChapterIndex);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('กำลังอัปโหลดรูปหน้าที่ ${i + 1}...')),
+            );
+          }
+          final uploadedUrl = await _uploadImage(_selectedImages[i]!, i);
           if (uploadedUrl != null) {
             pageUrl = uploadedUrl;
-            // อัปเดท URL ในช่องข้อความด้วย
             _pageControllers[i].text = uploadedUrl;
           }
         } else {
-          // ใช้ URL ที่กรอกเอง
           pageUrl = _pageControllers[i].text.trim();
         }
 
@@ -250,32 +182,34 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
         }
       }
 
-      setState(() {
-        isUploading = false;
-      });
+      setState(() => isUploading = false);
 
-      // เพิ่มตอนใหม่
-      await databaseRef.child(nextChapterIndex.toString()).set({
-        'number': int.parse(_numberController.text),
-        'title': _titleController.text.trim(),
-        'pages': pages,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-      });
+      final response = await ApiService.post(
+        '/api/v1/mangas/${widget.mangaId}/chapters',
+        {
+          'number': int.parse(_numberController.text),
+          'title': _titleController.text.trim(),
+          'pages': pages,
+        },
+      );
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('เพิ่มตอนใหม่สำเร็จ!')));
-
-      Navigator.pop(context);
+      if (!mounted) return;
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('เพิ่มตอนใหม่สำเร็จ!')));
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('บันทึกไม่สำเร็จ (${response.statusCode})')),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('เกิดข้อผิดพลาด: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('เกิดข้อผิดพลาด: $e')));
+      }
     } finally {
-      setState(() {
-        isLoading = false;
-        isUploading = false;
-      });
+      if (mounted) setState(() { isLoading = false; isUploading = false; });
     }
   }
 
@@ -303,18 +237,14 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                         labelText: 'เลขตอน',
                         labelStyle: TextStyle(color: Colors.white),
                         enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.white),
-                        ),
+                            borderSide: BorderSide(color: Colors.white)),
                         focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.blue),
-                        ),
+                            borderSide: BorderSide(color: Colors.blue)),
                       ),
                       style: const TextStyle(color: Colors.white),
                       keyboardType: TextInputType.number,
                       validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'กรุณาใส่เลขตอน';
-                        }
+                        if (value == null || value.isEmpty) return 'กรุณาใส่เลขตอน';
                         return null;
                       },
                     ),
@@ -328,17 +258,13 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                         labelText: 'ชื่อตอน',
                         labelStyle: TextStyle(color: Colors.white),
                         enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.white),
-                        ),
+                            borderSide: BorderSide(color: Colors.white)),
                         focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.blue),
-                        ),
+                            borderSide: BorderSide(color: Colors.blue)),
                       ),
                       style: const TextStyle(color: Colors.white),
                       validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'กรุณาใส่ชื่อตอน';
-                        }
+                        if (value == null || value.isEmpty) return 'กรุณาใส่ชื่อตอน';
                         return null;
                       },
                     ),
@@ -346,19 +272,14 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-
-              // หัวข้อหน้า
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'หน้าในตอน',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  const Text('หน้าในตอน',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
                   Row(
                     children: [
                       ElevatedButton.icon(
@@ -366,9 +287,8 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                         icon: const Icon(Icons.photo_library),
                         label: const Text('เลือกหลายรูป'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                        ),
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white),
                       ),
                       const SizedBox(width: 8),
                       ElevatedButton.icon(
@@ -376,17 +296,14 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                         icon: const Icon(Icons.add),
                         label: const Text('เพิ่มหน้า'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          foregroundColor: Colors.white,
-                        ),
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white),
                       ),
                     ],
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-
-              // รายการหน้า
               Expanded(
                 child: ListView.builder(
                   itemCount: _pageControllers.length,
@@ -402,13 +319,10 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Text(
-                                    'หน้า ${index + 1}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
+                                  Text('หน้า ${index + 1}',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold)),
                                   const Spacer(),
                                   IconButton(
                                     onPressed: () => _pickImage(index),
@@ -427,31 +341,30 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
                                 ],
                               ),
                               const SizedBox(height: 8),
-
-                              // ปุ่มดูรูปภาพ (ถ้าเลือกไฟล์ไว้)
-if (_selectedImages[index] != null)
-  Padding(
-    padding: const EdgeInsets.only(bottom: 8.0),
-    child: OutlinedButton.icon(
-      onPressed: () => _showPickedImageDialog(_selectedImages[index]!),
-      icon: const Icon(Icons.visibility),
-      label: const Text('ดูรูปภาพ'),
-      style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
-    ),
-  )
-else if (_pageControllers[index].text.trim().isNotEmpty)
-  Padding(
-    padding: const EdgeInsets.only(bottom: 8.0),
-    child: OutlinedButton.icon(
-      onPressed: () =>
-          _showNetworkImageDialog(_pageControllers[index].text.trim()),
-      icon: const Icon(Icons.visibility),
-      label: const Text('ดูรูปภาพ (จาก URL)'),
-      style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
-    ),
-  ),
-
-                              // ช่องใส่ URL
+                              if (_selectedImages[index] != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 8.0),
+                                  child: OutlinedButton.icon(
+                                    onPressed: () =>
+                                        _showPickedImageDialog(_selectedImages[index]!),
+                                    icon: const Icon(Icons.visibility),
+                                    label: const Text('ดูรูปภาพ'),
+                                    style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white),
+                                  ),
+                                )
+                              else if (_pageControllers[index].text.trim().isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 8.0),
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => _showNetworkImageDialog(
+                                        _pageControllers[index].text.trim()),
+                                    icon: const Icon(Icons.visibility),
+                                    label: const Text('ดูรูปภาพ (จาก URL)'),
+                                    style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white),
+                                  ),
+                                ),
                               TextFormField(
                                 controller: _pageControllers[index],
                                 decoration: InputDecoration(
@@ -488,10 +401,7 @@ else if (_pageControllers[index].text.trim().isNotEmpty)
                                 ),
                                 style: const TextStyle(color: Colors.white),
                                 validator: (value) {
-                                  // ถ้ามีรูปภาพที่เลือกแล้ว ไม่ต้อง validate URL
-                                  if (_selectedImages[index] != null) {
-                                    return null;
-                                  }
+                                  if (_selectedImages[index] != null) return null;
                                   if (value == null || value.isEmpty) {
                                     return 'กรุณาใส่ URL หรือเลือกรูปภาพ';
                                   }
@@ -506,10 +416,7 @@ else if (_pageControllers[index].text.trim().isNotEmpty)
                   },
                 ),
               ),
-
               const SizedBox(height: 16),
-
-              // แสดงสถานะการอัปโหลด
               if (isUploading)
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -522,14 +429,11 @@ else if (_pageControllers[index].text.trim().isNotEmpty)
                     children: [
                       CircularProgressIndicator(color: Colors.white),
                       SizedBox(width: 16),
-                      Text(
-                        'กำลังอัปโหลดรูปภาพ...',
-                        style: TextStyle(color: Colors.white),
-                      ),
+                      Text('กำลังอัปโหลดรูปภาพ...',
+                          style: TextStyle(color: Colors.white)),
                     ],
                   ),
                 ),
-
               ElevatedButton(
                 onPressed: isLoading ? null : addChapter,
                 style: ElevatedButton.styleFrom(
@@ -543,9 +447,7 @@ else if (_pageControllers[index].text.trim().isNotEmpty)
                         children: [
                           const CircularProgressIndicator(color: Colors.white),
                           const SizedBox(width: 16),
-                          Text(
-                            isUploading ? 'กำลังอัปโหลด...' : 'กำลังบันทึก...',
-                          ),
+                          Text(isUploading ? 'กำลังอัปโหลด...' : 'กำลังบันทึก...'),
                         ],
                       )
                     : const Text('เพิ่มตอน', style: TextStyle(fontSize: 16)),
