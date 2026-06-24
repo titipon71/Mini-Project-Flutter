@@ -36,7 +36,7 @@ Flutter App
 ## Project Structure
 
 ```
-my_app/
+Mini-Project-Flutter/
 ├── lib/                        # Flutter frontend
 │   ├── screens/                # หน้าจอต่างๆ
 │   ├── services/               # API, Auth, VIP services
@@ -48,13 +48,12 @@ my_app/
 │   │   ├── routers/            # API endpoints
 │   │   ├── models/             # SQLAlchemy models
 │   │   ├── schemas/            # Pydantic schemas
-│   │   ├── services/           # Business logic (JWT, Firebase, SlipOK)
+│   │   ├── services/           # Business logic (JWT, Firebase Auth, SlipOK)
 │   │   ├── main.py
 │   │   ├── config.py
 │   │   ├── database.py
 │   │   └── deps.py
-│   ├── alembic/                # Database migrations
-│   └── migrate_firebase.py     # Script ย้ายข้อมูลจาก Firebase
+│   └── alembic/                # Database migrations
 │
 └── RUN_COMMANDS.txt            # คำสั่งรัน
 ```

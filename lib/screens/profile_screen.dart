@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:Twebtoon/services/auth_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class ProfileScreen extends StatelessWidget {
   // ===== Sign Out Function =====
   Future<void> _signOut(BuildContext context) async {
     try {
-      await FirebaseAuth.instance.signOut();
+      await AuthService.signOut();
       // กลับไปหน้าแรกหรือหน้า login
       Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {

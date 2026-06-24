@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:Twebtoon/assets/widgets/vip_status_widget.dart';
 import 'package:Twebtoon/screens/admin_dashboard_screen.dart';
 import 'package:Twebtoon/screens/home2_screen.dart';
@@ -11,6 +10,7 @@ import 'package:Twebtoon/screens/sign_up_screen.dart';
 import 'package:Twebtoon/screens/topup_history_screen.dart';
 import 'package:Twebtoon/screens/topup_screen.dart';
 import 'package:Twebtoon/screens/user_settings_screen.dart';
+import 'package:Twebtoon/services/auth_service.dart';
 import 'package:sidebarx/sidebarx.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -120,13 +120,7 @@ class _ExampleSidebarXState extends State<ExampleSidebarX> {
   }
 
   Future<void> signOutFromAllProviders() async {
-    await FirebaseAuth.instance.signOut();
-    try {
-      final googleSignIn = GoogleSignIn();
-      if (await googleSignIn.isSignedIn()) {
-        await googleSignIn.disconnect();
-      }
-    } catch (_) {}
+    await AuthService.signOut();
   }
 
   @override

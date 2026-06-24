@@ -18,7 +18,6 @@ Future<bool> isVip() async {
 }
 
 /// Stream ที่ poll สถานะ VIP ทุก 30 วินาที
-/// ใช้แทน Firestore realtime listener
 Stream<bool> vipStream() async* {
   while (true) {
     yield await isVip();

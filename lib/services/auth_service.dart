@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'api_service.dart';
 
 class AuthService {
@@ -26,5 +27,11 @@ class AuthService {
   static Future<void> signOut() async {
     await FirebaseAuth.instance.signOut();
     await ApiService.clearToken();
+    try {
+      final googleSignIn = GoogleSignIn();
+      if (await googleSignIn.isSignedIn()) {
+        await googleSignIn.disconnect();
+      }
+    } catch (_) {}
   }
 }

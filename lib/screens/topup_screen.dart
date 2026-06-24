@@ -212,7 +212,7 @@ class _TopupScreenState extends State<TopupScreen> {
     }
   }
 
-  Future<String> _saveTopupToFirestore({
+  Future<String> _saveTopup({
     required String topupId,
     required String userId,
     required String? userName,
@@ -271,7 +271,7 @@ class _TopupScreenState extends State<TopupScreen> {
 
   void _listenTopup(String topupId) {
     _topupSub?.cancel();
-    // poll สถานะทุก 5 วินาที แทน Firestore realtime listener
+    // poll สถานะทุก 5 วินาที
     _topupSub = Stream.periodic(const Duration(seconds: 5))
         .asyncMap((_) => ApiService.get('/api/v1/topups/$topupId'))
         .listen((response) async {
@@ -749,7 +749,7 @@ class _TopupScreenState extends State<TopupScreen> {
                                   refresh(() => isSavingTopup = true);
 
                                   // 1) เตรียม topupId
-                                  // สร้าง UUID แทน Firestore auto-id
+                                  // สร้าง UUID สำหรับ topupId
                                   final topupId = DateTime.now().millisecondsSinceEpoch.toString();
 
                                   // 2) อัปโหลดสลิป (ถ้ามี)
@@ -774,8 +774,8 @@ class _TopupScreenState extends State<TopupScreen> {
                                   final refCode =
                                       'TOPUP-${DateTime.now().millisecondsSinceEpoch}-$uid';
 
-                                  // 4) บันทึก Firestore (ใช้ฟังก์ชันที่คุณมี)
-                                  await _saveTopupToFirestore(
+                                  // 4) บันทึก topup ผ่าน API
+                                  await _saveTopup(
                                     topupId: topupId,
                                     userId: uid,
                                     userName: userName,

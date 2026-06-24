@@ -7,7 +7,6 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "mysql+aiomysql://root:password@localhost:3306/twebtoon"
     FIREBASE_CREDENTIALS_PATH: str = "./firebase-credentials.json"
-    FIREBASE_DATABASE_URL: str = ""
     SLIPOK_API_KEY: str = ""
     SLIPOK_ENDPOINT: str = "https://api.slipok.com/api/line/apikey/54127"
     UPLOAD_DIR: str = "./uploads"
