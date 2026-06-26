@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -120,12 +119,11 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
         filename: filename,
         purpose: purpose,
       );
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return json['url'] as String?;
+      final url = ApiService.parseUploadUrl(response);
+      if (url == null) {
+        _showSnackBar('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ (${response.statusCode})');
       }
-      _showSnackBar('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ (${response.statusCode})');
-      return null;
+      return url;
     } catch (e) {
       _showSnackBar('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ: $e');
       return null;
@@ -141,12 +139,12 @@ class _EditMangaScreenState extends State<EditMangaScreen> {
       String backgroundUrl = _backgroundController.text;
 
       if (_coverBytes != null && _coverPickedName != null) {
-        final uploadedUrl = await _uploadImage(_coverBytes!, _coverPickedName!, 'manga_cover');
+        final uploadedUrl = await _uploadImage(_coverBytes!, _coverPickedName!, UploadPurpose.mangaCover);
         if (uploadedUrl != null) coverUrl = uploadedUrl;
       }
 
       if (_backgroundBytes != null && _bgPickedName != null) {
-        final uploadedUrl = await _uploadImage(_backgroundBytes!, _bgPickedName!, 'manga_background');
+        final uploadedUrl = await _uploadImage(_backgroundBytes!, _bgPickedName!, UploadPurpose.mangaBackground);
         if (uploadedUrl != null) backgroundUrl = uploadedUrl;
       }
 

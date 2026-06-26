@@ -23,6 +23,22 @@ class _SignInScreenState extends State<SignInScreen> {
   // bool _remember = true;
   // bool _loading = false; // เผื่อไว้ถ้าจะกันกดซ้ำ
 
+  Future<void> _finishAuth(User user) async {
+    final result = await AuthService.exchangeToken(user);
+    if (!mounted) return;
+
+    if (result.success) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const Home2Screen()),
+      );
+      return;
+    }
+
+    await AuthService.signOut();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result.message ?? 'เข้าสู่ระบบไม่สำเร็จ')),
+    );
+  }
 
   Future<void> signInWithGoogle() async {
     try {
@@ -34,13 +50,7 @@ class _SignInScreenState extends State<SignInScreen> {
         final userCredential = await FirebaseAuth.instance.signInWithPopup(
           googleProvider,
         );
-        await AuthService.exchangeToken(userCredential.user!);
-
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const Home2Screen()),
-          );
-        }
+        await _finishAuth(userCredential.user!);
         return;
       }
 
@@ -62,13 +72,7 @@ class _SignInScreenState extends State<SignInScreen> {
       final userCredential = await FirebaseAuth.instance.signInWithCredential(
         credential,
       );
-      await AuthService.exchangeToken(userCredential.user!);
-
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const Home2Screen()),
-        );
-      }
+      await _finishAuth(userCredential.user!);
     } on FirebaseAuthException catch (e) {
       String msg = 'ไม่สามารถเข้าสู่ระบบด้วย Google ได้';
       // เคสพบบ่อย ๆ
@@ -97,12 +101,7 @@ class _SignInScreenState extends State<SignInScreen> {
         final userCredential = await FirebaseAuth.instance.signInWithPopup(
           githubProvider,
         );
-
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const Home2Screen()),
-          );
-        }
+        await _finishAuth(userCredential.user!);
         return;
       }
 
@@ -134,12 +133,7 @@ class _SignInScreenState extends State<SignInScreen> {
         email: _email.text.trim(),
         password: _password.text.trim(),
       );
-      await AuthService.exchangeToken(credential.user!);
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const Home2Screen()),
-        );
-      }
+      await _finishAuth(credential.user!);
     } on FirebaseAuthException catch (e) {
       String msg = 'เข้าสู่ระบบไม่สำเร็จ';
       if (e.code == 'user-not-found') {

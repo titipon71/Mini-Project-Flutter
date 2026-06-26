@@ -94,13 +94,10 @@ class _EditWebsiteInfoScreenState extends State<EditWebsiteInfoScreen> {
         final response = await ApiService.uploadBytes(
           bytes: bytes,
           filename: image.name,
-          purpose: 'carousel_image',
+          purpose: UploadPurpose.carouselImage,
         );
-        if (response.statusCode == 200) {
-          final json = jsonDecode(response.body) as Map<String, dynamic>;
-          final url = json['url'] as String?;
-          if (url != null) newUrls.add(url);
-        }
+        final url = ApiService.parseUploadUrl(response);
+        if (url != null) newUrls.add(url);
         done++;
       }
 

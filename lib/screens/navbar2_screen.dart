@@ -345,8 +345,8 @@ class _Navbar2State extends State<Navbar2> with SingleTickerProviderStateMixin {
                       top: 0,
                       width: width,
                       height: widget.height,
-                      child: Image.network(
-                        'https://raw.githubusercontent.com/titipon71/Flutter-images/refs/heads/main/top.jpg',
+                      child: Image.asset(
+                        'lib/assets/images/hero-image.jpg',
                         fit: BoxFit.cover,
                       ),
                     ),
@@ -355,8 +355,8 @@ class _Navbar2State extends State<Navbar2> with SingleTickerProviderStateMixin {
                       top: 0,
                       width: width,
                       height: widget.height,
-                      child: Image.network(
-                        'https://raw.githubusercontent.com/titipon71/Flutter-images/refs/heads/main/top.jpg',
+                      child: Image.asset(
+                        'lib/assets/images/hero-image.jpg',
                         fit: BoxFit.cover,
                       ),
                     ),

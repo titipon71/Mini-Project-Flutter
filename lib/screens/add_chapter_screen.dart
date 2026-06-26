@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -87,13 +86,9 @@ class _AddChapterScreenState extends State<AddChapterScreen> {
       final response = await ApiService.uploadBytes(
         bytes: bytes,
         filename: imageFile.name,
-        purpose: 'chapter_page',
+        purpose: UploadPurpose.chapterPage,
       );
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return json['url'] as String?;
-      }
-      return null;
+      return ApiService.parseUploadUrl(response);
     } catch (e) {
       debugPrint('Error uploading image: $e');
       return null;

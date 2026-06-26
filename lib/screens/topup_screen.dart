@@ -5,10 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:Twebtoon/services/api_service.dart';
 import 'package:flutter/rendering.dart';
 import 'package:http/http.dart' as http;
-import 'package:Twebtoon/assets/widgets/example_sidebarx.dart';
+import 'package:Twebtoon/assets/widgets/app_sidebar.dart';
 import 'package:Twebtoon/screens/home2_screen.dart';
 import 'package:Twebtoon/screens/navbar2_screen.dart';
-import 'package:sidebarx/sidebarx.dart';
 import 'package:step_progress/step_progress.dart';
 import 'dart:convert';
 import 'dart:math';
@@ -42,7 +41,6 @@ class TopupScreen extends StatefulWidget {
 class _TopupScreenState extends State<TopupScreen> {
   StreamSubscription? _topupSub;
   final GlobalKey _qrKey = GlobalKey();
-  final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final stepProgressController = StepProgressController(
     totalSteps: 3,
     initialStep: 0,
@@ -184,18 +182,11 @@ class _TopupScreenState extends State<TopupScreen> {
     final response = await ApiService.uploadBytes(
       bytes: slipBytes!,
       filename: fileName,
-      purpose: 'topup-slip',
+      purpose: UploadPurpose.topupSlip,
       topupId: topupId,
     );
 
-    if (response.statusCode == 200) {
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final url = (json['asset'] as Map<String, dynamic>)['url'] as String?;
-      if (url != null) {
-        return '${ApiService.baseUrl}$url';
-      }
-    }
-    return null;
+    return ApiService.parseUploadUrl(response);
   }
 
   Future<void> _requestManualVerify({
@@ -445,7 +436,6 @@ class _TopupScreenState extends State<TopupScreen> {
 @override
   void dispose() {
     stepProgressController.dispose();
-    _controller.dispose();
     // ยกเลิกสตรีมถ้ามี (ดูหมายเหตุด้านล่าง)
     _topupSub?.cancel();
     super.dispose();
@@ -1158,7 +1148,7 @@ class _TopupScreenState extends State<TopupScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: const Navbar2(),
-      drawer: ExampleSidebarX(controller: _controller),
+      drawer: const Drawer(child: AppSidebar()),
       body: Center(
         child: SingleChildScrollView(
           child: Column(

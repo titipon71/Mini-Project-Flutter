@@ -248,17 +248,14 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
         final response = await ApiService.uploadBytes(
           bytes: bytes,
           filename: filename,
-          purpose: 'chapter_page',
+          purpose: UploadPurpose.chapterPage,
         );
-        if (response.statusCode == 200) {
-          final json = jsonDecode(response.body) as Map<String, dynamic>;
-          final url = json['url'] as String?;
-          if (url != null) {
-            setState(() => _pages[pageIdx]['url'] = url);
-            if (context.mounted) Navigator.pop(context);
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('อัปโหลดรูปสำเร็จ')));
-          }
+        final url = ApiService.parseUploadUrl(response);
+        if (url != null) {
+          setState(() => _pages[pageIdx]['url'] = url);
+          if (context.mounted) Navigator.pop(context);
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('อัปโหลดรูปสำเร็จ')));
         } else {
           setState(() { errorText = 'อัปโหลดไม่สำเร็จ (${response.statusCode})'; uploading = false; });
         }
@@ -403,13 +400,10 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
           final response = await ApiService.uploadBytes(
             bytes: bytes,
             filename: file.name,
-            purpose: 'chapter_page',
+            purpose: UploadPurpose.chapterPage,
           );
-          if (response.statusCode == 200) {
-            final json = jsonDecode(response.body) as Map<String, dynamic>;
-            final url = json['url'] as String?;
-            if (url != null) uploadedUrls.add(url);
-          }
+          final url = ApiService.parseUploadUrl(response);
+          if (url != null) uploadedUrls.add(url);
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
               content: Text('อัปโหลดสำเร็จ ${i + 1}/${selectedFiles.length} รูป'),

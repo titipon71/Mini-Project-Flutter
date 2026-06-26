@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -79,21 +78,18 @@ class _AddMangaScreenState extends State<AddMangaScreen> {
       final response = await ApiService.uploadBytes(
         bytes: bytes,
         filename: filename,
-        purpose: forCover ? 'manga_cover' : 'manga_background',
+        purpose: forCover ? UploadPurpose.mangaCover : UploadPurpose.mangaBackground,
       );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).clearSnackBars();
 
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final url = json['url'] as String?;
-        if (url != null) {
+      final url = ApiService.parseUploadUrl(response);
+      if (url != null) {
           if (forCover) { _coverController.text = url; }
           else { _backgroundController.text = url; }
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('อัปโหลด${forCover ? 'ปก' : 'พื้นหลัง'}สำเร็จ')));
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('อัปโหลด${forCover ? 'ปก' : 'พื้นหลัง'}สำเร็จ')));
       } else {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('อัปโหลดไม่สำเร็จ')));

@@ -10,9 +10,8 @@ Future<void> main() async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(
     DevicePreview(
-      
       backgroundColor: Colors.black,
-      enabled: false,
+      enabled: true,
       builder: (context) => const MyApp(),
     ),
   );

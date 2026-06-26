@@ -1,9 +1,7 @@
-import 'package:Twebtoon/assets/widgets/example_sidebarx.dart';
+import 'package:Twebtoon/assets/widgets/app_sidebar.dart';
 import 'package:Twebtoon/screens/navbar2_screen.dart';
 import 'package:flutter/material.dart';
-import 'package:Twebtoon/screens/sign_in_screen.dart';
-import 'package:Twebtoon/screens/sign_up_screen.dart';
-import 'package:sidebarx/sidebarx.dart';
+
 class ShellPage extends StatefulWidget {
   const ShellPage({super.key});
 
@@ -12,8 +10,8 @@ class ShellPage extends StatefulWidget {
 }
 
 class _ShellPageState extends State<ShellPage> {
-  final _controller = SidebarXController(selectedIndex: 0, extended: true);
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+  int _selectedIndex = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -24,13 +22,13 @@ class _ShellPageState extends State<ShellPage> {
       appBar: Navbar2(
         onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
       ),
-      drawer: ExampleSidebarX(controller: _controller), // ✅ ใช้ได้แล้ว
+      drawer: const Drawer(child: AppSidebar()),
       body: Row(
         children: [
-          if (isWide) ExampleSidebarX(controller: _controller),
+          if (isWide) const AppSidebar(),
           Expanded(
             child: IndexedStack(
-              index: _controller.selectedIndex,
+              index: _selectedIndex,
               children: const [
                 // TODO: ใส่หน้าตามเมนูของคุณ
                 Placeholder(),

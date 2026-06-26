@@ -1,10 +1,9 @@
-import 'package:Twebtoon/assets/widgets/example_sidebarx.dart';
+import 'package:Twebtoon/assets/widgets/app_sidebar.dart';
 import 'package:Twebtoon/screens/MangaDetail_screen.dart';
 import 'package:Twebtoon/screens/navbar2_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
-import 'package:sidebarx/sidebarx.dart';
 import 'package:Twebtoon/services/api_service.dart';
 import 'dart:convert';
 
@@ -37,8 +36,6 @@ class _Home2ScreenState extends State<Home2Screen>
   final CarouselSliderController _carouselCtrl = CarouselSliderController();
   final CarouselSliderController _carouselCtrlmangapop =
       CarouselSliderController();
-  final _controller = SidebarXController(selectedIndex: 0, extended: true);
-
   @override
   void initState() {
     super.initState();
@@ -132,7 +129,7 @@ class _Home2ScreenState extends State<Home2Screen>
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: const Navbar2(),
-      drawer: ExampleSidebarX(controller: _controller),
+      drawer: const Drawer(child: AppSidebar()),
       body: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
